@@ -1,4 +1,4 @@
-# Traffic — traffic simulation in Python
+# Traffic Simulator — traffic simulation in Python
 
 This project is an explicit traffic simulation written in Python.
 The goal is clarity and extensibility, not realism at all costs.
