@@ -24,13 +24,16 @@ The simulator is built incrementally, starting from a road network and cars movi
 - Fixed timestep simulation loop
 - 2D visualization and animation using matplotlib
 
-Cars now cross intersections: on reaching the end of an edge a router selects the next edge and the car continues, so traffic circulates the grid.
+Cars cross intersections (a router picks the next edge) and obey traffic
+lights: each intersection runs a fixed-time signal, and cars queue at red and
+release on green. Signal timing is driven by a pluggable controller, ready for
+adaptive or learned policies later.
 
 ## Roadmap (high level)
 
 1. Cars on edges ✅
 2. Intersections + random routing ✅
-3. Traffic lights and intersection controllers
+3. Traffic lights and intersection controllers ✅
 4. Metrics and diagnostics
 5. Destination-based routing
 6. ML / RL decision policies
@@ -43,7 +46,8 @@ Cars now cross intersections: on reaching the end of an edge a router selects th
 │   ├── vehicles.py       # Car model
 │   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
 │   ├── routing.py        # RandomRouter (intersection decisions)
-│   └── visualization.py  # matplotlib plotting and animation
+│   ├── signals.py        # traffic lights: controller interface + fixed-time
+│   └── visualization.py  # matplotlib plotting, animation, GIF export
 ├── tests/                # pytest suite
 ├── main.py               # entry point / example usage
 └── requirements.txt

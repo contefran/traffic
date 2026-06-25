@@ -9,6 +9,7 @@ from .network import Node, Edge, RoadNetwork, build_grid_network
 from .vehicles import Car
 from .simulation import TrafficSim
 from .routing import RandomRouter
+from .signals import Orientation, FixedTimeController, SignalSystem
 
 __all__ = [
     "Node",
@@ -18,6 +19,9 @@ __all__ = [
     "Car",
     "TrafficSim",
     "RandomRouter",
+    "Orientation",
+    "FixedTimeController",
+    "SignalSystem",
     "Visuals",
 ]
 
