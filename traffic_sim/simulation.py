@@ -25,11 +25,13 @@ class TrafficSim:
         cars: List[Car],
         router: Optional[RandomRouter] = None,
         signals: Optional[SignalSystem] = None,
+        metrics=None,
     ) -> None:
         self.net = net
         self.cars = cars
         self.router = router if router is not None else RandomRouter(net)
         self.signals = signals  # None => no signals, every approach is green
+        self.metrics = metrics  # optional MetricsCollector; observes each step
         self.t = 0.0
 
     def _desired_accel(self, car: Car, gap: Optional[float], v_des: float) -> float:
@@ -111,3 +113,6 @@ class TrafficSim:
             car.trail.append((self.t, car.edge_id, car.s))
 
         self.t += dt
+
+        if self.metrics is not None:
+            self.metrics.record(self)

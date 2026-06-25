@@ -12,6 +12,10 @@ class RandomRouter:
     U-turns (immediately going back down the edge just travelled) are avoided
     unless the node is a dead-end with no other option. Seeded for
     deterministic, reproducible runs.
+
+    Turns are permissive: the simulation models no intersection right-of-way,
+    so a chosen turn may cross oncoming traffic sharing the same green phase.
+    Protected turns / gap acceptance are a deferred future phase.
     """
 
     def __init__(self, net: RoadNetwork, seed: int = 0, allow_uturn: bool = False) -> None:

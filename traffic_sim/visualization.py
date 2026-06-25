@@ -66,6 +66,54 @@ class Visuals:
         plt.close(fig)
         return path
 
+    def render_metrics(self, metrics, signals=None, net=None,
+                       path: str = "metrics.png", title: str = None):
+        """Plot mean speed and queue length over time, shaded by signal phase.
+
+        Returns the PNG path. ``signals``/``net`` are optional; if given, the
+        background is shaded by which orientation has green (fixed-time, all
+        nodes in phase), so the effect of red/green on flow is visible.
+        """
+        from .signals import Orientation
+
+        t = metrics.times
+        fig, (ax_v, ax_q) = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
+        self._shade_phases(ax_v, t, signals, net)
+        self._shade_phases(ax_q, t, signals, net)
+
+        ax_v.plot(t, metrics.mean_speeds, color="tab:blue")
+        ax_v.set_ylabel("mean speed [m/s]")
+        ax_q.plot(t, metrics.queue_lengths, color="tab:red")
+        ax_q.set_ylabel("queue length [cars]")
+        ax_q.set_xlabel("time [s]")
+        ax_v.set_title(title or "Traffic-flow metrics over time")
+        fig.tight_layout()
+        fig.savefig(path, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
+    def _shade_phases(self, ax, times, signals, net) -> None:
+        from .signals import Orientation
+
+        if signals is None or net is None or not times:
+            return
+        node = next((n.id for n in net.nodes if signals.is_signalized(n.id)), None)
+        if node is None:
+            return
+        # Shade contiguous runs where horizontal has green.
+        start = times[0]
+        prev = signals.controller.green_orientation(node, times[0]) is Orientation.HORIZONTAL
+        for tt in times[1:] + [times[-1]]:
+            cur = signals.controller.green_orientation(node, tt) is Orientation.HORIZONTAL
+            if cur != prev:
+                if prev:
+                    ax.axvspan(start, tt, color=GREEN, alpha=0.08)
+                else:
+                    ax.axvspan(start, tt, color=RED, alpha=0.06)
+                start, prev = tt, cur
+        ax.axvspan(start, times[-1], color=(GREEN if prev else RED),
+                   alpha=0.08 if prev else 0.06)
+
     def plot_network(self, net, cars=None) -> None:
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net, arrows=True)

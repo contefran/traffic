@@ -34,7 +34,7 @@ adaptive or learned policies later.
 1. Cars on edges ✅
 2. Intersections + random routing ✅
 3. Traffic lights and intersection controllers ✅
-4. Metrics and diagnostics
+4. Metrics and diagnostics ✅
 5. Destination-based routing
 6. ML / RL decision policies
 
@@ -47,6 +47,7 @@ adaptive or learned policies later.
 │   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
 │   ├── routing.py        # RandomRouter (intersection decisions)
 │   ├── signals.py        # traffic lights: controller interface + fixed-time
+│   ├── metrics.py        # flow diagnostics: speed, queue, throughput
 │   └── visualization.py  # matplotlib plotting, animation, GIF export
 ├── tests/                # pytest suite
 ├── main.py               # entry point / example usage

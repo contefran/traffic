@@ -10,6 +10,7 @@ from .vehicles import Car
 from .simulation import TrafficSim
 from .routing import RandomRouter
 from .signals import Orientation, FixedTimeController, SignalSystem
+from .metrics import MetricsCollector, StepMetrics
 
 __all__ = [
     "Node",
@@ -22,6 +23,8 @@ __all__ = [
     "Orientation",
     "FixedTimeController",
     "SignalSystem",
+    "MetricsCollector",
+    "StepMetrics",
     "Visuals",
 ]
 
