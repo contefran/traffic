@@ -7,6 +7,7 @@ the car-following parameters used by the simulation.
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -15,6 +16,11 @@ class Car:
     edge_id: int
     s: float        # position along edge, in [0, edge.length]
     v: float        # speed [m/s]
+
+    # The edge this car will move onto at the end of the current one. Committed
+    # in advance (before the stop line) so the signal can gate the specific
+    # movement; ``None`` until the router decides. Reset to None on each transfer.
+    next_edge: Optional[int] = None
 
     # Physical / behavioural parameters (per-car so they can be varied).
     max_speed: float = 50.0       # [m/s] hard cap on desired speed

@@ -76,11 +76,21 @@ class TrafficSim:
 
         for edge_id, lst in cars_on_edge.items():
             edge = self.net.edges[edge_id]
-            red = self.signals is not None and not self.signals.is_green(edge_id, self.t)
 
             for idx, car in enumerate(lst):
                 leader = lst[idx - 1] if idx > 0 else None
                 v_des = min(edge.speed_limit, car.max_speed)
+
+                # Commit the next edge in advance so the signal can gate this
+                # car's specific movement (e.g. a protected left vs a through).
+                if car.next_edge is None:
+                    car.next_edge = self.router.next_edge(edge_id)
+
+                red = (
+                    self.signals is not None
+                    and car.next_edge is not None
+                    and not self.signals.allows_movement(edge_id, car.next_edge, self.t)
+                )
 
                 # Constraints ahead, each (gap, speed): the leader and/or, on
                 # red, the stop line at the end of the edge (a stopped object).
@@ -109,24 +119,24 @@ class TrafficSim:
                     new_s = max(car.s, max_s)
                     car.v = 0.0
 
-                # On green, hand over to the router at the end of the edge.
-                if not red and new_s >= edge.length:
-                    next_edge = self.router.next_edge(edge_id)
-                    if next_edge is None:
-                        # Dead-end: clamp and stop.
-                        new_s = edge.length
+                # Reached the end of the edge.
+                if new_s >= edge.length:
+                    if car.next_edge is None:
+                        new_s = edge.length  # dead-end: clamp and stop
                         car.v = 0.0
-                    else:
+                    elif not red:
                         overshoot = new_s - edge.length
-                        next_len = self.net.edges[next_edge].length
-                        transfers.append((car, next_edge, min(overshoot, next_len)))
-                        continue  # s/edge applied during the transfer pass
+                        next_len = self.net.edges[car.next_edge].length
+                        transfers.append((car, car.next_edge, min(overshoot, next_len)))
+                        continue  # applied in the transfer pass
+                    # If red, fall through: the car waits at the stop line.
 
                 car.s = new_s
                 car.trail.append((self.t, car.edge_id, car.s))
 
         for car, next_edge, new_s in transfers:
             car.edge_id = next_edge
+            car.next_edge = None  # re-route from the new edge next step
             car.s = new_s
             car.trail.append((self.t, car.edge_id, car.s))
 

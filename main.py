@@ -7,7 +7,7 @@ from traffic_sim import (
     Car,
     RandomRouter,
     TrafficSim,
-    FixedTimeController,
+    ProtectedPhaseController,
     SignalSystem,
     Visuals,
 )
@@ -32,7 +32,7 @@ def main() -> None:
 
     cars = spawn_cars(net, n_cars=60, seed=1)
     router = RandomRouter(net, seed=42)
-    signals = SignalSystem(net, FixedTimeController(green_time=8.0))
+    signals = SignalSystem(net, ProtectedPhaseController(green_time=5.0))
     sim = TrafficSim(net, cars, router, signals=signals)
 
     Visuals().animate_sim(net, sim, dt=0.1, steps=800)

@@ -34,7 +34,7 @@ adaptive or learned policies later.
 
 1. Cars on edges ✅
 2. Intersections + random routing ✅
-3. Traffic lights and intersection controllers ✅
+3. Traffic lights and intersection controllers ✅ (fixed-time and protected-phase)
 4. Metrics and diagnostics ✅
 5. Destination-based routing
 6. ML / RL decision policies
