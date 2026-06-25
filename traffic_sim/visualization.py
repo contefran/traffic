@@ -8,21 +8,34 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
 
+from .network import DEFAULT_SPEED_LIMIT
+
 
 GREEN = "#2ca02c"
 RED = "#d62728"
+ARTERIAL = "#1f77b4"
 
 
 class Visuals:
     def _draw_edges(self, ax, net, arrows: bool = False) -> None:
+        # Edges present in both directions are two-way; the rest are one-way and
+        # get a direction arrow so the asymmetry is visible.
+        pairs = {(e.u, e.v) for e in net.edges}
         for e in net.edges:
             n1, n2 = net.nodes[e.u], net.nodes[e.v]
-            ax.plot([n1.x, n2.x], [n1.y, n2.y], color="black", linewidth=1)
-            if arrows:
-                ax.arrow(
-                    n1.x, n1.y,
-                    (n2.x - n1.x) / 1.5, (n2.y - n1.y) / 1.5,
-                    length_includes_head=True, head_width=3, alpha=0.3,
+            arterial = e.speed_limit > DEFAULT_SPEED_LIMIT + 1e-6
+            ax.plot([n1.x, n2.x], [n1.y, n2.y],
+                    color=ARTERIAL if arterial else "black",
+                    linewidth=2.6 if arterial else 1.0,
+                    zorder=1)
+            one_way = (e.v, e.u) not in pairs
+            if arrows or one_way:
+                ax.annotate(
+                    "", xytext=(n1.x, n1.y),
+                    xy=(n1.x + 0.6 * (n2.x - n1.x), n1.y + 0.6 * (n2.y - n1.y)),
+                    arrowprops=dict(arrowstyle="-|>", color="black",
+                                    alpha=0.35 if arrows else 0.7, lw=1.0),
+                    zorder=1,
                 )
 
     def _draw_signals(self, ax, net, signals, t: float) -> None:

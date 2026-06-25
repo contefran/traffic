@@ -15,8 +15,9 @@ The simulator is built incrementally, starting from a road network and cars movi
 
 ## Current features
 
-- Directed road network (grid-based builder)
-- Nodes and edges with geometry and speed limits
+- Directed road network: a uniform grid, or a heterogeneous "city" grid with
+  jittered positions, one-way streets, and higher-speed arterials
+- Nodes and edges with geometry and per-edge speed limits
 - Cars following the Intelligent Driver Model (IDM):
   - smooth acceleration and braking
   - realistic queues; density-dependent speed emerges (the fundamental diagram)
@@ -42,7 +43,7 @@ adaptive or learned policies later.
 
 .
 ├── traffic_sim/          # simulation package
-│   ├── network.py        # Node/Edge/RoadNetwork + grid builder + geometry
+│   ├── network.py        # Node/Edge/RoadNetwork + grid/city builders + geometry
 │   ├── vehicles.py       # Car model
 │   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
 │   ├── routing.py        # RandomRouter (intersection decisions)
