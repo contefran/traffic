@@ -24,12 +24,12 @@ The simulator is built incrementally, starting from a road network and cars movi
 - Fixed timestep simulation loop
 - 2D visualization and animation using matplotlib
 
-Cars currently stop at the end of an edge. Intersections and routing are the next steps.
+Cars now cross intersections: on reaching the end of an edge a router selects the next edge and the car continues, so traffic circulates the grid.
 
 ## Roadmap (high level)
 
 1. Cars on edges ✅
-2. Intersections + random routing
+2. Intersections + random routing ✅
 3. Traffic lights and intersection controllers
 4. Metrics and diagnostics
 5. Destination-based routing
@@ -38,20 +38,24 @@ Cars currently stop at the end of an edge. Intersections and routing are the nex
 ## Project structure
 
 .
-├── builder.py    # Road network construction (grid builder)
-├── traffic.py    # Car model and traffic simulation logic
-├── visuals.py    # Plotting and animation
-└── main.py       # Entry point / example usage
+├── traffic_sim/          # simulation package
+│   ├── network.py        # Node/Edge/RoadNetwork + grid builder + geometry
+│   ├── vehicles.py       # Car model
+│   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
+│   ├── routing.py        # RandomRouter (intersection decisions)
+│   └── visualization.py  # matplotlib plotting and animation
+├── tests/                # pytest suite
+├── main.py               # entry point / example usage
+└── requirements.txt
 
 ## Requirements
 
 - Python 3.10+
-- numpy
-- matplotlib
+- numpy, matplotlib (visualization); pytest (tests)
 
 Install dependencies with:
 
-pip install numpy matplotlib
+pip install -r requirements.txt
 
 ## Running the simulation
 
@@ -63,6 +67,12 @@ This will:
 - build a small grid road network
 - place a few cars on selected edges
 - run and animate the simulation
+
+## Running the tests
+
+MPLBACKEND=Agg python -m pytest -q
+
+The simulation core has no plotting dependency, so the tests run without a display.
 
 ## Design philosophy
 

@@ -1,0 +1,14 @@
+[project]
+name = "traffic-sim"
+version = "0.1.0"
+description = "Explicit, step-based 2D traffic simulation in Python."
+requires-python = ">=3.10"
+dependencies = ["numpy", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+# The virtualenv lives in the repo root, so restrict collection to tests/.
+testpaths = ["tests"]
+addopts = "-q"
