@@ -5,11 +5,17 @@ dependencies. ``Visuals`` is imported lazily so the core can run headless
 (e.g. behind an API) without matplotlib installed.
 """
 
-from .network import Node, Edge, RoadNetwork, build_grid_network
+from .network import Node, Edge, RoadNetwork, build_grid_network, build_city_grid
 from .vehicles import Car
 from .simulation import TrafficSim
 from .routing import RandomRouter
-from .signals import Orientation, FixedTimeController, SignalSystem
+from .signals import (
+    Orientation,
+    TurnType,
+    FixedTimeController,
+    ProtectedPhaseController,
+    SignalSystem,
+)
 from .metrics import MetricsCollector, StepMetrics
 
 __all__ = [
@@ -17,11 +23,14 @@ __all__ = [
     "Edge",
     "RoadNetwork",
     "build_grid_network",
+    "build_city_grid",
     "Car",
     "TrafficSim",
     "RandomRouter",
     "Orientation",
+    "TurnType",
     "FixedTimeController",
+    "ProtectedPhaseController",
     "SignalSystem",
     "MetricsCollector",
     "StepMetrics",

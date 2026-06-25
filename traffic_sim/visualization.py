@@ -8,41 +8,70 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
 
+from .network import DEFAULT_SPEED_LIMIT
+
 
 GREEN = "#2ca02c"
 RED = "#d62728"
+ARTERIAL = "#1f77b4"
 
 
 class Visuals:
     def _draw_edges(self, ax, net, arrows: bool = False) -> None:
+        # Edges present in both directions are two-way; the rest are one-way and
+        # get a direction arrow so the asymmetry is visible.
+        pairs = {(e.u, e.v) for e in net.edges}
         for e in net.edges:
             n1, n2 = net.nodes[e.u], net.nodes[e.v]
-            ax.plot([n1.x, n2.x], [n1.y, n2.y], color="black", linewidth=1)
-            if arrows:
-                ax.arrow(
-                    n1.x, n1.y,
-                    (n2.x - n1.x) / 1.5, (n2.y - n1.y) / 1.5,
-                    length_includes_head=True, head_width=3, alpha=0.3,
+            arterial = e.speed_limit > DEFAULT_SPEED_LIMIT + 1e-6
+            ax.plot([n1.x, n2.x], [n1.y, n2.y],
+                    color=ARTERIAL if arterial else "black",
+                    linewidth=2.6 if arterial else 1.0,
+                    zorder=1)
+            one_way = (e.v, e.u) not in pairs
+            if arrows or one_way:
+                ax.annotate(
+                    "", xytext=(n1.x, n1.y),
+                    xy=(n1.x + 0.6 * (n2.x - n1.x), n1.y + 0.6 * (n2.y - n1.y)),
+                    arrowprops=dict(arrowstyle="-|>", color="black",
+                                    alpha=0.35 if arrows else 0.7, lw=1.0),
+                    zorder=1,
                 )
 
-    def _draw_signals(self, ax, net, signals, t: float) -> None:
-        """Two indicators per signalized node: a horizontal one (E-W movement)
-        and a vertical one (N-S), each green or red for the current phase."""
-        from .signals import Orientation
+    def _signal_specs(self, net, signals):
+        """Per signalized node, four movement indicators: E-W through/left to the
+        right of the node, N-S through/left above it. Returns (positions, specs)
+        where each spec is (node_id, orientation, turn) for colouring."""
+        from .signals import Orientation, TurnType
 
         unit = net.edges[0].length if net.edges else 1.0
-        off = 0.16 * unit
-        hx, hy, hc, vx, vy, vc = [], [], [], [], [], []
+        off = 0.18 * unit
+        positions, specs = [], []
         for node in net.nodes:
             if not signals.is_signalized(node.id):
                 continue
-            green = signals.controller.green_orientation(node.id, t)
-            hx.append(node.x + off); hy.append(node.y)
-            hc.append(GREEN if green is Orientation.HORIZONTAL else RED)
-            vx.append(node.x); vy.append(node.y + off)
-            vc.append(GREEN if green is Orientation.VERTICAL else RED)
-        ax.scatter(hx, hy, c=hc, s=28, marker="s", zorder=4)
-        ax.scatter(vx, vy, c=vc, s=28, marker="s", zorder=4)
+            layout = [
+                ((node.x + off, node.y - 0.4 * off), Orientation.HORIZONTAL, TurnType.STRAIGHT),
+                ((node.x + off, node.y + 0.4 * off), Orientation.HORIZONTAL, TurnType.LEFT),
+                ((node.x - 0.4 * off, node.y + off), Orientation.VERTICAL, TurnType.STRAIGHT),
+                ((node.x + 0.4 * off, node.y + off), Orientation.VERTICAL, TurnType.LEFT),
+            ]
+            for pos, orient, turn in layout:
+                positions.append(pos)
+                specs.append((node.id, orient, turn))
+        return positions, specs
+
+    def _signal_colors(self, signals, t, specs):
+        return [GREEN if signals.allows(n, o, turn, t) else RED
+                for (n, o, turn) in specs]
+
+    def _draw_signals(self, ax, net, signals, t: float) -> None:
+        positions, specs = self._signal_specs(net, signals)
+        if not positions:
+            return
+        pos = np.array(positions)
+        ax.scatter(pos[:, 0], pos[:, 1], c=self._signal_colors(signals, t, specs),
+                   s=16, marker="s", zorder=4)
 
     def render_state(self, net, cars=None, t: float = 0.0, signals=None,
                      path: str = "frame.png", title: str = None):
@@ -93,18 +122,20 @@ class Visuals:
         return path
 
     def _shade_phases(self, ax, times, signals, net) -> None:
-        from .signals import Orientation
+        from .signals import Orientation, TurnType
 
         if signals is None or net is None or not times:
             return
         node = next((n.id for n in net.nodes if signals.is_signalized(n.id)), None)
         if node is None:
             return
-        # Shade contiguous runs where horizontal has green.
+        # Shade contiguous runs where the E-W through movement has green.
+        def h_through(tt):
+            return signals.allows(node, Orientation.HORIZONTAL, TurnType.STRAIGHT, tt)
         start = times[0]
-        prev = signals.controller.green_orientation(node, times[0]) is Orientation.HORIZONTAL
+        prev = h_through(times[0])
         for tt in times[1:] + [times[-1]]:
-            cur = signals.controller.green_orientation(node, tt) is Orientation.HORIZONTAL
+            cur = h_through(tt)
             if cur != prev:
                 if prev:
                     ax.axvspan(start, tt, color=GREEN, alpha=0.08)
@@ -131,33 +162,6 @@ class Visuals:
         ax.set_title("Road network")
         plt.show()
 
-    def _signal_layout(self, net, signals):
-        """Fixed marker positions for each signalized node's two indicators.
-
-        Returns (positions, node_ids, orientations) where positions[k] belongs
-        to node_ids[k] and shows orientations[k]'s state; colours are recomputed
-        per frame from the controller.
-        """
-        unit = net.edges[0].length if net.edges else 1.0
-        off = 0.16 * unit
-        from .signals import Orientation
-
-        positions, node_ids, orients = [], [], []
-        for node in net.nodes:
-            if not signals.is_signalized(node.id):
-                continue
-            positions.append((node.x + off, node.y))  # E-W indicator
-            node_ids.append(node.id)
-            orients.append(Orientation.HORIZONTAL)
-            positions.append((node.x, node.y + off))  # N-S indicator
-            node_ids.append(node.id)
-            orients.append(Orientation.VERTICAL)
-        return np.array(positions), node_ids, orients
-
-    def _signal_colors(self, signals, t, node_ids, orients):
-        return [GREEN if signals.controller.green_orientation(n, t) is o else RED
-                for n, o in zip(node_ids, orients)]
-
     def _build_animation(self, net, sim, dt, steps):
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net)
@@ -169,8 +173,10 @@ class Visuals:
         signals = sim.signals
         sig_scat = None
         if signals is not None:
-            pos, node_ids, orients = self._signal_layout(net, signals)
-            sig_scat = ax.scatter(pos[:, 0], pos[:, 1], s=28, marker="s", zorder=4)
+            positions, specs = self._signal_specs(net, signals)
+            if positions:
+                pos = np.array(positions)
+                sig_scat = ax.scatter(pos[:, 0], pos[:, 1], s=16, marker="s", zorder=4)
 
         scat = ax.scatter([], [], s=40, color="tab:blue", zorder=5)
 
@@ -183,7 +189,7 @@ class Visuals:
             points = [net.point_on_edge(c.edge_id, c.s) for c in sim.cars]
             scat.set_offsets(np.array(points) if points else np.empty((0, 2)))
             if sig_scat is not None:
-                sig_scat.set_color(self._signal_colors(signals, sim.t, node_ids, orients))
+                sig_scat.set_color(self._signal_colors(signals, sim.t, specs))
                 return (scat, sig_scat)
             return (scat,)
 

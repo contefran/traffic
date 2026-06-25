@@ -1,0 +1,56 @@
+import math
+
+from traffic_sim import build_grid_network, build_city_grid
+from traffic_sim.network import DEFAULT_SPEED_LIMIT
+from traffic_sim.signals import edge_orientation, Orientation, SignalSystem, FixedTimeController
+
+
+def test_plain_city_grid_matches_regular_grid():
+    # With no heterogeneity, it should reproduce the regular grid.
+    city = build_city_grid(4, 3, block=50.0)
+    grid = build_grid_network(4, 3, block=50.0)
+    assert len(city.nodes) == len(grid.nodes)
+    assert len(city.edges) == len(grid.edges)
+    for e in city.edges:
+        assert math.isclose(e.length, 50.0)
+
+
+def test_preserves_grid_indices_for_signals():
+    # i/j must survive jitter so the H/V signal model still classifies edges.
+    city = build_city_grid(5, 5, block=50.0, seed=1, jitter=0.3)
+    assert city.node_id[(0, 0)] == 0
+    sig = SignalSystem(city, FixedTimeController())
+    # Interior nodes still mix both orientations -> signalized.
+    assert sig.is_signalized(city.node_id[(2, 2)]) is True
+    horiz = [e for e in city.edges if edge_orientation(city, e.id) is Orientation.HORIZONTAL]
+    vert = [e for e in city.edges if edge_orientation(city, e.id) is Orientation.VERTICAL]
+    assert horiz and vert
+
+
+def test_jitter_moves_positions_but_not_indices():
+    city = build_city_grid(4, 4, block=50.0, seed=2, jitter=0.25)
+    moved = any(not math.isclose(n.x, n.i * 50.0) or not math.isclose(n.y, n.j * 50.0)
+               for n in city.nodes)
+    assert moved
+
+
+def test_one_way_reduces_edge_count():
+    two_way = build_city_grid(6, 6, block=50.0, seed=3, one_way_prob=0.0)
+    all_one_way = build_city_grid(6, 6, block=50.0, seed=3, one_way_prob=1.0)
+    assert len(all_one_way.edges) * 2 == len(two_way.edges)
+
+
+def test_arterials_get_higher_speed_limit():
+    city = build_city_grid(6, 6, block=50.0, seed=4, arterial_every=2, arterial_speed=25.0)
+    speeds = {e.speed_limit for e in city.edges}
+    assert 25.0 in speeds
+    assert DEFAULT_SPEED_LIMIT in speeds
+    assert any(e.speed_limit == 25.0 for e in city.edges)
+
+
+def test_city_grid_is_deterministic():
+    a = build_city_grid(5, 5, seed=7, jitter=0.2, one_way_prob=0.3, arterial_every=2)
+    b = build_city_grid(5, 5, seed=7, jitter=0.2, one_way_prob=0.3, arterial_every=2)
+    assert len(a.edges) == len(b.edges)
+    assert [(e.u, e.v, round(e.length, 6)) for e in a.edges] == \
+           [(e.u, e.v, round(e.length, 6)) for e in b.edges]

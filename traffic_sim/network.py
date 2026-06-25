@@ -10,6 +10,7 @@ here and nowhere else.
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 import math
+import random
 
 # Default speed limit: ~50 km/h expressed in m/s.
 DEFAULT_SPEED_LIMIT = 13.9
@@ -93,5 +94,76 @@ def build_grid_network(width: int, height: int, block: float) -> RoadNetwork:
                 v = node_id[(i, j + 1)]
                 add_edge(u, v)
                 add_edge(v, u)
+
+    return RoadNetwork(nodes=nodes, edges=edges, node_id=node_id)
+
+
+def build_city_grid(
+    width: int,
+    height: int,
+    block: float = 50.0,
+    *,
+    seed: int = 0,
+    jitter: float = 0.0,
+    one_way_prob: float = 0.0,
+    arterial_every: int = 0,
+    arterial_speed: float = 25.0,
+) -> RoadNetwork:
+    """A heterogeneous grid: same ``(i, j)`` topology as :func:`build_grid_network`
+    (so the H/V signal model still applies) but with cheap realism added.
+
+    * ``jitter`` — node positions are randomly offset by up to ``jitter * block``
+      in x and y (the grid indices ``i, j`` are unchanged, only ``x, y`` move).
+    * ``one_way_prob`` — probability a neighbour connection is one-way (a single
+      directed edge) instead of the usual two-way pair.
+    * ``arterial_every`` / ``arterial_speed`` — every ``arterial_every``-th row and
+      column is an arterial whose edges get the higher ``arterial_speed`` limit.
+
+    Seeded, so a given set of arguments always yields the same network.
+    """
+    rng = random.Random(seed)
+    nodes: List[Node] = []
+    node_id: Dict[Tuple[int, int], int] = {}
+
+    nid = 0
+    for j in range(height):
+        for i in range(width):
+            dx = rng.uniform(-jitter, jitter) * block
+            dy = rng.uniform(-jitter, jitter) * block
+            node_id[(i, j)] = nid
+            nodes.append(Node(id=nid, i=i, j=j, x=i * block + dx, y=j * block + dy))
+            nid += 1
+
+    edges: List[Edge] = []
+
+    def add_edge(u: int, v: int, speed: float) -> None:
+        n1, n2 = nodes[u], nodes[v]
+        length = math.hypot(n2.x - n1.x, n2.y - n1.y)
+        eid = len(edges)
+        edges.append(Edge(id=eid, u=u, v=v, length=length, speed_limit=speed))
+        nodes[u].out_edges.append(eid)
+        nodes[v].in_edges.append(eid)
+
+    def connect(u: int, v: int, speed: float) -> None:
+        if one_way_prob and rng.random() < one_way_prob:
+            # One-way: keep a single direction (chosen at random).
+            a, b = (u, v) if rng.random() < 0.5 else (v, u)
+            add_edge(a, b, speed)
+        else:
+            add_edge(u, v, speed)
+            add_edge(v, u, speed)
+
+    def is_arterial(index: int) -> bool:
+        return arterial_every > 0 and index % arterial_every == 0
+
+    for j in range(height):
+        for i in range(width):
+            u = node_id[(i, j)]
+            if i + 1 < width:  # horizontal connection lies on row j
+                speed = arterial_speed if is_arterial(j) else DEFAULT_SPEED_LIMIT
+                connect(u, node_id[(i + 1, j)], speed)
+            if j + 1 < height:  # vertical connection lies on column i
+                speed = arterial_speed if is_arterial(i) else DEFAULT_SPEED_LIMIT
+                connect(u, node_id[(i, j + 1)], speed)
 
     return RoadNetwork(nodes=nodes, edges=edges, node_id=node_id)
