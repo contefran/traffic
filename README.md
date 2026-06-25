@@ -13,16 +13,16 @@ The simulator is built incrementally, starting from a road network and cars movi
 - Easy to extend toward intersections, signals, and agent decision-making
 - Suitable as a base for later ML / RL experiments
 
-## Current features (Phase 1)
+## Current features
 
 - Directed road network (grid-based builder)
 - Nodes and edges with geometry and speed limits
-- Cars moving along edges with:
-  - acceleration and braking
-  - car-following rule
-  - collision avoidance
+- Cars following the Intelligent Driver Model (IDM):
+  - smooth acceleration and braking
+  - realistic queues; density-dependent speed emerges (the fundamental diagram)
+  - no rear-end collisions
 - Fixed timestep simulation loop
-- 2D visualization and animation using matplotlib
+- Flow metrics (speed, queue length, throughput) and 2D animation via matplotlib
 
 Cars cross intersections (a router picks the next edge) and obey traffic
 lights: each intersection runs a fixed-time signal, and cars queue at red and
