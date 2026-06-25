@@ -35,6 +35,7 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+.~lock.*#
 
 # Project artifacts
 *.mp4
