@@ -22,6 +22,12 @@ class Car:
     # movement; ``None`` until the router decides. Reset to None on each transfer.
     next_edge: Optional[int] = None
 
+    # Destination node id for destination-based routing. ``None`` means "no
+    # destination" (the car wanders, e.g. under RandomRouter). A
+    # destination-aware router reads this to steer toward ``dest`` and assigns
+    # a fresh one when the car arrives.
+    dest: Optional[int] = None
+
     # Physical / behavioural parameters (per-car so they can be varied).
     max_speed: float = 50.0       # [m/s] hard cap on desired speed
     length: float = 4.5           # [m]

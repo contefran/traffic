@@ -84,7 +84,7 @@ class TrafficSim:
                 # Commit the next edge in advance so the signal can gate this
                 # car's specific movement (e.g. a protected left vs a through).
                 if car.next_edge is None:
-                    car.next_edge = self.router.next_edge(edge_id)
+                    car.next_edge = self.router.next_edge(edge_id, car)
 
                 red = (
                     self.signals is not None

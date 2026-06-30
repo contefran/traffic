@@ -8,7 +8,7 @@ dependencies. ``Visuals`` is imported lazily so the core can run headless
 from .network import Node, Edge, RoadNetwork, build_grid_network, build_city_grid
 from .vehicles import Car
 from .simulation import TrafficSim
-from .routing import RandomRouter
+from .routing import RandomRouter, ShortestPathRouter
 from .signals import (
     Orientation,
     TurnType,
@@ -27,6 +27,7 @@ __all__ = [
     "Car",
     "TrafficSim",
     "RandomRouter",
+    "ShortestPathRouter",
     "Orientation",
     "TurnType",
     "FixedTimeController",
