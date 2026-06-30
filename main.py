@@ -5,7 +5,7 @@ import random
 from traffic_sim import (
     build_city_grid,
     Car,
-    RandomRouter,
+    ShortestPathRouter,
     TrafficSim,
     ProtectedPhaseController,
     SignalSystem,
@@ -26,12 +26,13 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
 def main() -> None:
     net = build_city_grid(
         width=8, height=8, block=60.0,
-        seed=1, jitter=0.18, one_way_prob=0.15, arterial_every=3, arterial_speed=25.0,
+        seed=1, jitter=0.22, one_way_prob=0.15, drop_prob=0.12,
+        arterial_every=3, arterial_speed=25.0,
     )
     print(f"nodes={len(net.nodes)} edges={len(net.edges)}")
 
     cars = spawn_cars(net, n_cars=60, seed=1)
-    router = RandomRouter(net, seed=42)
+    router = ShortestPathRouter(net, seed=42)  # each car heads to a destination
     signals = SignalSystem(net, ProtectedPhaseController(green_time=5.0))
     sim = TrafficSim(net, cars, router, signals=signals)
 

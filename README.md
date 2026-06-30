@@ -16,7 +16,10 @@ The simulator is built incrementally, starting from a road network and cars movi
 ## Current features
 
 - Directed road network: a uniform grid, or a heterogeneous "city" grid with
-  jittered positions, one-way streets, and higher-speed arterials
+  jittered positions, one-way streets, missing links, and higher-speed
+  arterials (always repaired to stay strongly connected)
+- Routing: random wandering, or destination-based fastest-path routing (cars
+  steer toward a destination node, preferring faster arterials)
 - Nodes and edges with geometry and per-edge speed limits
 - Cars following the Intelligent Driver Model (IDM):
   - smooth acceleration and braking
@@ -36,7 +39,7 @@ adaptive or learned policies later.
 2. Intersections + random routing ✅
 3. Traffic lights and intersection controllers ✅ (fixed-time and protected-phase)
 4. Metrics and diagnostics ✅
-5. Destination-based routing
+5. Destination-based routing ✅ (fastest-path; random wandering still available)
 6. ML / RL decision policies
 
 ## Project structure
@@ -46,7 +49,7 @@ adaptive or learned policies later.
 │   ├── network.py        # Node/Edge/RoadNetwork + grid/city builders + geometry
 │   ├── vehicles.py       # Car model
 │   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
-│   ├── routing.py        # RandomRouter (intersection decisions)
+│   ├── routing.py        # RandomRouter + ShortestPathRouter (intersection decisions)
 │   ├── signals.py        # traffic lights: controller interface + fixed-time
 │   ├── metrics.py        # flow diagnostics: speed, queue, throughput
 │   └── visualization.py  # matplotlib plotting, animation, GIF export
