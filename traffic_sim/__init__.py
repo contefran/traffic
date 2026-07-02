@@ -12,6 +12,7 @@ from .routing import RandomRouter, ShortestPathRouter
 from .signals import (
     Orientation,
     TurnType,
+    SignalPlan,
     FixedTimeController,
     ProtectedPhaseController,
     SignalSystem,
@@ -31,6 +32,7 @@ __all__ = [
     "ShortestPathRouter",
     "Orientation",
     "TurnType",
+    "SignalPlan",
     "FixedTimeController",
     "ProtectedPhaseController",
     "SignalSystem",
@@ -42,8 +44,13 @@ __all__ = [
 
 
 def __getattr__(name):
-    # Lazy access: `from traffic_sim import Visuals` only pulls in matplotlib
-    # when actually requested.
+    """Lazily resolve :class:`Visuals` on first access.
+
+    Keeps ``import traffic_sim`` free of matplotlib/numpy: those are only pulled
+    in when ``traffic_sim.Visuals`` is actually requested, so the simulation core
+    stays headless-friendly (e.g. behind an API). Any other attribute raises
+    :class:`AttributeError` as usual.
+    """
     if name == "Visuals":
         from .visualization import Visuals
         return Visuals

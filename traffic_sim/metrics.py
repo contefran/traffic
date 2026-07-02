@@ -19,6 +19,13 @@ STOPPED_SPEED = 0.5
 
 @dataclass
 class StepMetrics:
+    """A single time-step's aggregate flow measurements.
+
+    One of these is appended to the collector's history after every
+    :meth:`TrafficSim.step`. Together they form the time series plotted by the
+    visualiser and the intended training signal for the flow-prediction model.
+    """
+
     t: float
     mean_speed: float       # mean speed over all cars [m/s]
     n_stopped: int          # cars at/below STOPPED_SPEED (queue length)
@@ -27,6 +34,15 @@ class StepMetrics:
 
 @dataclass
 class MetricsCollector:
+    """Records flow diagnostics as the simulation runs, from the outside.
+
+    Injected into :class:`TrafficSim` (which calls :meth:`record` each step) or
+    driven manually. It keeps a per-step ``history`` of :class:`StepMetrics`,
+    plus cumulative ``edge_crossings`` (a throughput map). ``stopped_speed`` is
+    the speed at or below which a car counts as queued. The collector never
+    mutates the simulation — it only observes — so the core stays unaware of it.
+    """
+
     stopped_speed: float = STOPPED_SPEED
     history: List[StepMetrics] = field(default_factory=list)
     # Per-edge cumulative crossings (cars that left that edge into a new one).
@@ -34,6 +50,13 @@ class MetricsCollector:
     _last_edge: Dict[int, int] = field(default_factory=dict)
 
     def record(self, sim) -> None:
+        """Snapshot ``sim``'s current state into a new :class:`StepMetrics`.
+
+        Computes mean speed and queue length over all cars, and counts
+        intersection crossings by detecting which cars changed edge since the
+        previous call (also accumulating per-edge crossings in
+        ``edge_crossings``). Call once per step, after the step has advanced.
+        """
         cars = sim.cars
         speeds = [c.v for c in cars]
         mean_speed = sum(speeds) / len(speeds) if speeds else 0.0
@@ -58,17 +81,26 @@ class MetricsCollector:
 
     @property
     def times(self) -> List[float]:
+        """The recorded time stamps [s], one per step, in order."""
         return [m.t for m in self.history]
 
     @property
     def mean_speeds(self) -> List[float]:
+        """The per-step mean car speed [m/s] time series."""
         return [m.mean_speed for m in self.history]
 
     @property
     def queue_lengths(self) -> List[int]:
+        """The per-step queue length (count of stopped cars) time series."""
         return [m.n_stopped for m in self.history]
 
     def summary(self) -> dict:
+        """Aggregate the whole run into a small dict of scalar statistics.
+
+        Includes step count, wall-clock duration, average and peak queue,
+        average speed, total intersection crossings, and throughput per second.
+        Returns ``{"steps": 0}`` if nothing was recorded.
+        """
         if not self.history:
             return {"steps": 0}
         n = len(self.history)

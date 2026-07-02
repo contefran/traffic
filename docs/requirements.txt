@@ -1,0 +1,5 @@
+# Documentation build dependencies (Sphinx + theme).
+# The package's own deps (numpy, matplotlib) are mocked in conf.py, so they are
+# not needed here.
+sphinx>=7
+furo

@@ -25,6 +25,15 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
 
 
 def main() -> None:
+    """Build a heterogeneous city grid, populate it, and open the animation.
+
+    A worked example of wiring the pieces together: a jittered city grid with
+    one-way streets, dropped links and arterials; 60 cars; a
+    :class:`ShortestPathRouter` steering each to a destination; a
+    :class:`ProtectedPhaseController` on the signals; and a
+    :class:`PriorityModel` for right-of-way at any unsignalized node. Edit the
+    values here to experiment with grid size, density, ``dt`` and step count.
+    """
     net = build_city_grid(
         width=8, height=8, block=60.0,
         seed=1, jitter=0.22, one_way_prob=0.15, drop_prob=0.12,

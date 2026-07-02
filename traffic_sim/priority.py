@@ -38,14 +38,31 @@ Contender = Tuple[int, Optional[int], float, float]
 
 
 class PriorityModel:
+    """Gap-acceptance right-of-way for unsignalized nodes (see module docs).
+
+    Stateless apart from its tuning parameters and a reference to the network;
+    the simulation gathers the contending cars each step and asks
+    :meth:`must_yield` whether an approach's front car has to give way.
+    """
+
     def __init__(self, net: RoadNetwork, *, trigger_dist: float = 30.0,
                  critical_gap: float = 2.5, min_gap: float = 6.0) -> None:
+        """Configure the right-of-way thresholds.
+
+        ``trigger_dist`` — only cars within this distance of a node are
+        considered contenders [m]. ``critical_gap`` — the critical time headway
+        used for gap acceptance; a higher-priority car counts as "imminent" when
+        it is within ``speed * critical_gap`` [s]. ``min_gap`` — a floor on that
+        distance, so a car essentially at the stop line always counts as present
+        even at low speed [m].
+        """
         self.net = net
         self.trigger_dist = trigger_dist  # only cars this near a node contest [m]
         self.critical_gap = critical_gap  # critical time headway for acceptance [s]
         self.min_gap = min_gap            # closer than this counts as "at the node" [m]
 
     def _is_arterial(self, edge_id: int) -> bool:
+        """Whether ``edge_id`` is an arterial (speed limit above the default)."""
         return self.net.edges[edge_id].speed_limit > DEFAULT_SPEED_LIMIT + 1e-6
 
     def _rank(self, edge_id: int) -> Tuple[int, int]:
@@ -68,6 +85,13 @@ class PriorityModel:
         return True
 
     def _imminent(self, gap: float, speed: float) -> bool:
+        """Whether a contender ``gap`` metres away at ``speed`` will enter soon.
+
+        This is the gap-acceptance test: the horizon grows with speed
+        (``speed * critical_gap``) but never falls below ``min_gap``, so a fast
+        approaching car blocks from farther out while a car already at the line
+        blocks regardless of speed.
+        """
         return gap <= max(self.min_gap, speed * self.critical_gap)
 
     def must_yield(self, my_from: int, my_to: Optional[int],

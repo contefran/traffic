@@ -12,6 +12,16 @@ from typing import Optional
 
 @dataclass
 class Car:
+    """A single vehicle: 1-D state on the road graph plus its driver parameters.
+
+    Spatial state is minimal — the ``edge_id`` it occupies, the distance ``s``
+    travelled along that edge, and the speed ``v``. World position is derived on
+    demand via :meth:`RoadNetwork.point_on_edge`, never stored here. The
+    car-following parameters (``accel``, ``braking``, ``s0``, ``time_headway``,
+    ``max_speed``, ``length``) are per-car so heterogeneous drivers can be mixed;
+    the Intelligent Driver Model in :meth:`TrafficSim.step` reads them directly.
+    """
+
     id: int
     edge_id: int
     s: float        # position along edge, in [0, edge.length]

@@ -29,7 +29,8 @@ The simulator is built incrementally, starting from a road network and cars movi
 - Flow metrics (speed, queue length, throughput) and 2D animation via matplotlib
 
 Cars cross intersections (a router picks the next edge) and obey traffic
-lights: each intersection runs a fixed-time signal, and cars queue at red and
+lights: each intersection runs its own signal on an independent timer (a
+per-node cycle / split / offset — no global clock), and cars queue at red and
 release on green. Signal timing is driven by a pluggable controller, ready for
 adaptive or learned policies later. Unsignalized intersections use an optional
 right-of-way model (arterial priority + gap acceptance) so minor streets yield

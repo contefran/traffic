@@ -18,6 +18,15 @@ DEFAULT_SPEED_LIMIT = 13.9
 
 @dataclass
 class Node:
+    """A grid intersection (graph vertex).
+
+    Carries both its integer grid indices ``(i, j)`` — which the H/V signal
+    model depends on and which stay fixed even when positions are jittered — and
+    its world position ``(x, y)`` in metres. ``out_edges`` / ``in_edges`` hold
+    the ids of edges leaving / entering this node (indices into
+    :attr:`RoadNetwork.edges`).
+    """
+
     id: int
     i: int  # grid column
     j: int  # grid row
@@ -29,6 +38,13 @@ class Node:
 
 @dataclass
 class Edge:
+    """A one-way road segment from node ``u`` to node ``v``.
+
+    ``length`` is in metres and ``speed_limit`` in m/s; a two-way street is
+    represented by two opposite ``Edge`` objects. ``lanes`` is carried for a
+    future multi-lane model but is not yet used by the dynamics.
+    """
+
     id: int
     u: int  # source node id
     v: int  # target node id
@@ -39,6 +55,14 @@ class Edge:
 
 @dataclass
 class RoadNetwork:
+    """A directed road graph plus the geometry needed to place cars on it.
+
+    ``nodes`` and ``edges`` are indexed by id (their list position); ``node_id``
+    maps a grid coordinate ``(i, j)`` to its node id. This object is the single
+    source of world geometry — a car's ``(x, y)`` always comes from
+    :meth:`point_on_edge`, never stored on the car.
+    """
+
     nodes: List[Node]
     edges: List[Edge]
     node_id: Dict[Tuple[int, int], int]  # (i, j) -> node id
@@ -75,6 +99,7 @@ def build_grid_network(width: int, height: int, block: float) -> RoadNetwork:
     edges: List[Edge] = []
 
     def add_edge(u: int, v: int) -> None:
+        """Append one directed edge ``u -> v`` and register it on both nodes."""
         n1, n2 = nodes[u], nodes[v]
         length = math.hypot(n2.x - n1.x, n2.y - n1.y)
         eid = len(edges)
@@ -143,6 +168,7 @@ def build_city_grid(
     edges: List[Edge] = []
 
     def add_edge(u: int, v: int, speed: float) -> None:
+        """Append one directed edge ``u -> v`` with the given speed limit."""
         n1, n2 = nodes[u], nodes[v]
         length = math.hypot(n2.x - n1.x, n2.y - n1.y)
         eid = len(edges)
@@ -151,7 +177,9 @@ def build_city_grid(
         nodes[v].in_edges.append(eid)
 
     def connect(u: int, v: int, speed: float, arterial: bool) -> None:
-        # Arterials are never dropped, so through-routes stay intact.
+        """Connect neighbours ``u`` and ``v``, honouring ``drop_prob`` (skip the
+        connection) and ``one_way_prob`` (a single directed edge instead of a
+        two-way pair). Arterial connections are never dropped."""
         if not arterial and drop_prob and rng.random() < drop_prob:
             return
         if one_way_prob and rng.random() < one_way_prob:
@@ -163,6 +191,7 @@ def build_city_grid(
             add_edge(v, u, speed)
 
     def is_arterial(index: int) -> bool:
+        """Whether grid row/column ``index`` is an arterial (higher speed)."""
         return arterial_every > 0 and index % arterial_every == 0
 
     for j in range(height):
@@ -184,6 +213,7 @@ def build_city_grid(
     # lattice is connected, so such a boundary pair always exists while >1
     # component remains.
     def grid_neighbours(node: Node):
+        """Yield the node ids of ``node``'s existing grid neighbours (E/W/N/S)."""
         for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             nbr = node_id.get((node.i + di, node.j + dj))
             if nbr is not None:

@@ -24,6 +24,16 @@ IDM_DELTA = 4.0
 
 
 class TrafficSim:
+    """The mutable simulation state and its single-step update.
+
+    Holds the (static) :class:`RoadNetwork`, the list of :class:`Car` objects it
+    advances in place, and the pluggable policies that shape their behaviour: a
+    ``router`` (which edge next), optional ``signals`` (traffic lights), optional
+    ``priority`` (right-of-way at unsignalized nodes), and an optional
+    ``metrics`` collector. Given a seeded router the whole thing is
+    deterministic. Call :meth:`step` repeatedly to run it.
+    """
+
     def __init__(
         self,
         net: RoadNetwork,
@@ -33,6 +43,14 @@ class TrafficSim:
         priority: Optional[PriorityModel] = None,
         metrics=None,
     ) -> None:
+        """Wire up the simulation.
+
+        ``router`` defaults to a :class:`RandomRouter` over ``net``. ``signals``
+        of ``None`` means every approach is always green; ``priority`` of
+        ``None`` means unsignalized nodes are an unchecked free-for-all;
+        ``metrics`` of ``None`` means nothing is recorded. ``cars`` is mutated in
+        place as the simulation runs.
+        """
         self.net = net
         self.cars = cars
         self.router = router if router is not None else RandomRouter(net)
@@ -43,6 +61,7 @@ class TrafficSim:
         self.t = 0.0
 
     def _unsignalized(self, node_id: int) -> bool:
+        """True if ``node_id`` has no active signal (so right-of-way applies)."""
         return self.signals is None or not self.signals.is_signalized(node_id)
 
     def _approach_fronts(self, cars_on_edge: Dict[int, List[Car]]) -> Dict[int, list]:
@@ -90,6 +109,18 @@ class TrafficSim:
         return car.accel * (free - (s_star / gap) ** 2)
 
     def step(self, dt: float) -> None:
+        """Advance the whole simulation by ``dt`` seconds.
+
+        In one pass: bucket cars by edge and sort each edge front-to-back;
+        for each car compute its IDM acceleration against the most restrictive
+        obstacle (its leader and/or a red stop line from signals or a
+        right-of-way yield), integrate speed and position, and clamp with a hard
+        backstop so it never passes its leader or crosses a red line. Cars that
+        reach the end of their edge are transferred to ``next_edge`` in a
+        deferred second pass (carrying the overshoot) so a moving car does not
+        disturb the ordering mid-step. Advances ``self.t`` and, if a metrics
+        collector is attached, records the new state.
+        """
         # Group cars by edge and sort each edge front (high s) -> back.
         cars_on_edge: Dict[int, List[Car]] = {}
         for car in self.cars:

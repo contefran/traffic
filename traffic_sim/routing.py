@@ -33,11 +33,18 @@ class RandomRouter:
     """
 
     def __init__(self, net: RoadNetwork, seed: int = 0, allow_uturn: bool = False) -> None:
+        """``seed`` fixes the random choices (reproducible runs); set
+        ``allow_uturn`` to permit reversing back down the approach edge."""
         self.net = net
         self.rng = random.Random(seed)
         self.allow_uturn = allow_uturn
 
     def next_edge(self, edge_id: int, car: Optional[Car] = None) -> Optional[int]:
+        """Pick a random out-edge at the end of ``edge_id`` (``car`` ignored).
+
+        Returns ``None`` at a dead-end with no outgoing edge; otherwise avoids
+        the U-turn back onto ``edge_id`` unless that is the only option.
+        """
         edge = self.net.edges[edge_id]
         node = self.net.nodes[edge.v]
         options = list(node.out_edges)
@@ -68,6 +75,9 @@ class ShortestPathRouter:
     """
 
     def __init__(self, net: RoadNetwork, seed: int = 0) -> None:
+        """``seed`` fixes the random destination assignments and the
+        tie-break used when a destination is unreachable, for reproducible runs.
+        Per-destination cost tables are computed lazily and cached here."""
         self.net = net
         self.rng = random.Random(seed)
         # dest node id -> {node id: free-flow cost to reach dest}
@@ -112,6 +122,15 @@ class ShortestPathRouter:
         return dest
 
     def next_edge(self, edge_id: int, car: Optional[Car] = None) -> Optional[int]:
+        """Choose the out-edge at the end of ``edge_id`` that best serves ``car.dest``.
+
+        ``car`` is required (this router steers by its ``dest``); passing ``None``
+        raises. If the car has no destination or has just reached it, a fresh one
+        is assigned. Returns the out-edge minimising ``edge_cost +
+        cost_to_go(neighbour)``, ``None`` at a dead-end, or — when the
+        destination is unreachable from here — a random non-U-turn fallback so
+        the car keeps moving and re-routes next step.
+        """
         if car is None:
             raise ValueError("ShortestPathRouter requires a car (it routes to car.dest)")
 
