@@ -9,6 +9,7 @@ from traffic_sim import (
     TrafficSim,
     ProtectedPhaseController,
     SignalSystem,
+    PriorityModel,
     Visuals,
 )
 
@@ -34,7 +35,9 @@ def main() -> None:
     cars = spawn_cars(net, n_cars=60, seed=1)
     router = ShortestPathRouter(net, seed=42)  # each car heads to a destination
     signals = SignalSystem(net, ProtectedPhaseController(green_time=5.0))
-    sim = TrafficSim(net, cars, router, signals=signals)
+    # Right-of-way at any unsignalized node (arterial priority + gap acceptance).
+    priority = PriorityModel(net)
+    sim = TrafficSim(net, cars, router, signals=signals, priority=priority)
 
     Visuals().animate_sim(net, sim, dt=0.1, steps=800)
 

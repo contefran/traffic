@@ -31,7 +31,9 @@ The simulator is built incrementally, starting from a road network and cars movi
 Cars cross intersections (a router picks the next edge) and obey traffic
 lights: each intersection runs a fixed-time signal, and cars queue at red and
 release on green. Signal timing is driven by a pluggable controller, ready for
-adaptive or learned policies later.
+adaptive or learned policies later. Unsignalized intersections use an optional
+right-of-way model (arterial priority + gap acceptance) so minor streets yield
+to major-road traffic instead of driving straight through it.
 
 ## Roadmap (high level)
 
@@ -51,6 +53,7 @@ adaptive or learned policies later.
 │   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
 │   ├── routing.py        # RandomRouter + ShortestPathRouter (intersection decisions)
 │   ├── signals.py        # traffic lights: controller interface + fixed-time
+│   ├── priority.py       # right-of-way / gap acceptance at unsignalized nodes
 │   ├── metrics.py        # flow diagnostics: speed, queue, throughput
 │   └── visualization.py  # matplotlib plotting, animation, GIF export
 ├── tests/                # pytest suite

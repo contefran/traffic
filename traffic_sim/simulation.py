@@ -15,6 +15,7 @@ from .network import RoadNetwork
 from .vehicles import Car
 from .routing import RandomRouter
 from .signals import SignalSystem
+from .priority import PriorityModel
 
 # Hard safety buffer kept between a follower and its leader [m].
 LEADER_BUFFER = 0.1
@@ -29,14 +30,40 @@ class TrafficSim:
         cars: List[Car],
         router: Optional[RandomRouter] = None,
         signals: Optional[SignalSystem] = None,
+        priority: Optional[PriorityModel] = None,
         metrics=None,
     ) -> None:
         self.net = net
         self.cars = cars
         self.router = router if router is not None else RandomRouter(net)
         self.signals = signals  # None => no signals, every approach is green
+        # Right-of-way at unsignalized nodes; None => no yielding (free-for-all).
+        self.priority = priority
         self.metrics = metrics  # optional MetricsCollector; observes each step
         self.t = 0.0
+
+    def _unsignalized(self, node_id: int) -> bool:
+        return self.signals is None or not self.signals.is_signalized(node_id)
+
+    def _approach_fronts(self, cars_on_edge: Dict[int, List[Car]]) -> Dict[int, list]:
+        """Per unsignalized node, the front car of each approach that is near
+        enough to contest, as ``(from_edge, to_edge, gap, speed)``. Commits each
+        such car's ``next_edge`` so its intended movement is known.
+        """
+        fronts: Dict[int, list] = {}
+        for edge_id, lst in cars_on_edge.items():
+            edge = self.net.edges[edge_id]
+            if not self._unsignalized(edge.v):
+                continue
+            front = lst[0]  # lst is sorted front (high s) -> back
+            gap = edge.length - front.s
+            if gap > self.priority.trigger_dist:
+                continue
+            if front.next_edge is None:
+                front.next_edge = self.router.next_edge(edge_id, front)
+            fronts.setdefault(edge.v, []).append(
+                (edge_id, front.next_edge, gap, front.v))
+        return fronts
 
     def _idm_accel(self, car: Car, v_des: float,
                    obstacle: Optional[Tuple[float, float]]) -> float:
@@ -70,6 +97,9 @@ class TrafficSim:
         for lst in cars_on_edge.values():
             lst.sort(key=lambda c: c.s, reverse=True)
 
+        # Right-of-way contest data at unsignalized nodes (empty if disabled).
+        fronts = self._approach_fronts(cars_on_edge) if self.priority is not None else {}
+
         # Defer edge transfers so a car moving to a new edge does not disturb
         # the leader/follower ordering of the edge currently being processed.
         transfers: List[tuple] = []  # (car, next_edge_id, new_s)
@@ -91,6 +121,14 @@ class TrafficSim:
                     and car.next_edge is not None
                     and not self.signals.allows_movement(edge_id, car.next_edge, self.t)
                 )
+
+                # At an unsignalized node the front car of an approach may have
+                # to yield right-of-way to conflicting higher-priority traffic.
+                if (self.priority is not None and idx == 0
+                        and self._unsignalized(edge.v)
+                        and self.priority.must_yield(edge_id, car.next_edge,
+                                                     fronts.get(edge.v, []))):
+                    red = True
 
                 # Constraints ahead, each (gap, speed): the leader and/or, on
                 # red, the stop line at the end of the edge (a stopped object).

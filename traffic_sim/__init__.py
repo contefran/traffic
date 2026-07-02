@@ -16,6 +16,7 @@ from .signals import (
     ProtectedPhaseController,
     SignalSystem,
 )
+from .priority import PriorityModel
 from .metrics import MetricsCollector, StepMetrics
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "FixedTimeController",
     "ProtectedPhaseController",
     "SignalSystem",
+    "PriorityModel",
     "MetricsCollector",
     "StepMetrics",
     "Visuals",
