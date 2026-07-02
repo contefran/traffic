@@ -17,9 +17,24 @@ ARTERIAL = "#1f77b4"
 
 
 class Visuals:
+    """Matplotlib rendering for the network, live sim, and metrics.
+
+    Every method that shows cars reads their world position from
+    :meth:`RoadNetwork.point_on_edge` and never recomputes geometry. The class
+    offers three kinds of output: static frames (:meth:`render_state`,
+    :meth:`plot_network`), a metrics time-series plot (:meth:`render_metrics`),
+    and animations (:meth:`animate_sim` for a live window, :meth:`save_animation`
+    for a headless GIF). It is imported lazily by the package so the simulation
+    core has no hard matplotlib dependency.
+    """
+
     def _draw_edges(self, ax, net, arrows: bool = False) -> None:
-        # Edges present in both directions are two-way; the rest are one-way and
-        # get a direction arrow so the asymmetry is visible.
+        """Draw all edges onto ``ax``.
+
+        Arterials (higher speed limit) are drawn thicker and blue. Edges without
+        a reverse partner are one-way and get a direction arrow so the asymmetry
+        is visible; ``arrows=True`` forces (fainter) arrows on every edge.
+        """
         pairs = {(e.u, e.v) for e in net.edges}
         for e in net.edges:
             n1, n2 = net.nodes[e.u], net.nodes[e.v]
@@ -62,10 +77,17 @@ class Visuals:
         return positions, specs
 
     def _signal_colors(self, signals, t, specs):
+        """Green/red colour for each indicator spec at time ``t``.
+
+        ``specs`` is the ``(node_id, orientation, turn)`` list from
+        :meth:`_signal_specs`; each entry is green iff ``signals`` currently
+        allows that movement. Recomputed every animation frame.
+        """
         return [GREEN if signals.allows(n, o, turn, t) else RED
                 for (n, o, turn) in specs]
 
     def _draw_signals(self, ax, net, signals, t: float) -> None:
+        """Scatter the per-node signal indicators onto ``ax`` for a static frame."""
         positions, specs = self._signal_specs(net, signals)
         if not positions:
             return
@@ -122,6 +144,13 @@ class Visuals:
         return path
 
     def _shade_phases(self, ax, times, signals, net) -> None:
+        """Shade the background of ``ax`` by signal phase over ``times``.
+
+        Picks one representative signalized node and shades contiguous spans
+        green where its east-west through movement is allowed and red otherwise,
+        so the correlation between phase and flow is visible on the metrics plot.
+        A no-op when there are no signals, no network, or no time samples.
+        """
         from .signals import Orientation, TurnType
 
         if signals is None or net is None or not times:
@@ -131,6 +160,7 @@ class Visuals:
             return
         # Shade contiguous runs where the E-W through movement has green.
         def h_through(tt):
+            """Whether the representative node's east-west through is green at ``tt``."""
             return signals.allows(node, Orientation.HORIZONTAL, TurnType.STRAIGHT, tt)
         start = times[0]
         prev = h_through(times[0])
@@ -146,6 +176,12 @@ class Visuals:
                    alpha=0.08 if prev else 0.06)
 
     def plot_network(self, net, cars=None) -> None:
+        """Open an interactive window showing the network (and optional cars).
+
+        A quick inspection helper: draws every edge with direction arrows, marks
+        the nodes, and scatters any ``cars`` at their current positions, then
+        blocks on ``plt.show()``. For headless output use :meth:`render_state`.
+        """
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net, arrows=True)
 
@@ -163,6 +199,15 @@ class Visuals:
         plt.show()
 
     def _build_animation(self, net, sim, dt, steps):
+        """Construct the matplotlib ``FuncAnimation`` that drives the sim.
+
+        Sets up the static backdrop (edges, signal markers), then returns
+        ``(fig, anim)`` where each frame calls ``sim.step(dt)``, moves the car
+        scatter to the new positions, and recolours the signal markers. Shared by
+        :meth:`animate_sim` (live window) and :meth:`save_animation` (GIF), which
+        differ only in how they consume the returned animation. Runs for
+        ``steps`` frames.
+        """
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net)
         min_x, min_y, max_x, max_y = net.bounds()
@@ -181,10 +226,12 @@ class Visuals:
         scat = ax.scatter([], [], s=40, color="tab:blue", zorder=5)
 
         def init():
+            """Blit initialiser: start with an empty car scatter."""
             scat.set_offsets(np.empty((0, 2)))
             return (scat, sig_scat) if sig_scat else (scat,)
 
         def update(frame):
+            """Advance the sim one step and redraw cars (and signal colours)."""
             sim.step(dt)
             points = [net.point_on_edge(c.edge_id, c.s) for c in sim.cars]
             scat.set_offsets(np.array(points) if points else np.empty((0, 2)))

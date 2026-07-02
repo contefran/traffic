@@ -16,7 +16,10 @@ The simulator is built incrementally, starting from a road network and cars movi
 ## Current features
 
 - Directed road network: a uniform grid, or a heterogeneous "city" grid with
-  jittered positions, one-way streets, and higher-speed arterials
+  jittered positions, one-way streets, missing links, and higher-speed
+  arterials (always repaired to stay strongly connected)
+- Routing: random wandering, or destination-based fastest-path routing (cars
+  steer toward a destination node, preferring faster arterials)
 - Nodes and edges with geometry and per-edge speed limits
 - Cars following the Intelligent Driver Model (IDM):
   - smooth acceleration and braking
@@ -26,9 +29,12 @@ The simulator is built incrementally, starting from a road network and cars movi
 - Flow metrics (speed, queue length, throughput) and 2D animation via matplotlib
 
 Cars cross intersections (a router picks the next edge) and obey traffic
-lights: each intersection runs a fixed-time signal, and cars queue at red and
+lights: each intersection runs its own signal on an independent timer (a
+per-node cycle / split / offset — no global clock), and cars queue at red and
 release on green. Signal timing is driven by a pluggable controller, ready for
-adaptive or learned policies later.
+adaptive or learned policies later. Unsignalized intersections use an optional
+right-of-way model (arterial priority + gap acceptance) so minor streets yield
+to major-road traffic instead of driving straight through it.
 
 ## Roadmap (high level)
 
@@ -36,7 +42,7 @@ adaptive or learned policies later.
 2. Intersections + random routing ✅
 3. Traffic lights and intersection controllers ✅ (fixed-time and protected-phase)
 4. Metrics and diagnostics ✅
-5. Destination-based routing
+5. Destination-based routing ✅ (fastest-path; random wandering still available)
 6. ML / RL decision policies
 
 ## Project structure
@@ -46,8 +52,9 @@ adaptive or learned policies later.
 │   ├── network.py        # Node/Edge/RoadNetwork + grid/city builders + geometry
 │   ├── vehicles.py       # Car model
 │   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
-│   ├── routing.py        # RandomRouter (intersection decisions)
+│   ├── routing.py        # RandomRouter + ShortestPathRouter (intersection decisions)
 │   ├── signals.py        # traffic lights: controller interface + fixed-time
+│   ├── priority.py       # right-of-way / gap acceptance at unsignalized nodes
 │   ├── metrics.py        # flow diagnostics: speed, queue, throughput
 │   └── visualization.py  # matplotlib plotting, animation, GIF export
 ├── tests/                # pytest suite

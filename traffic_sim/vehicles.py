@@ -12,6 +12,16 @@ from typing import Optional
 
 @dataclass
 class Car:
+    """A single vehicle: 1-D state on the road graph plus its driver parameters.
+
+    Spatial state is minimal — the ``edge_id`` it occupies, the distance ``s``
+    travelled along that edge, and the speed ``v``. World position is derived on
+    demand via :meth:`RoadNetwork.point_on_edge`, never stored here. The
+    car-following parameters (``accel``, ``braking``, ``s0``, ``time_headway``,
+    ``max_speed``, ``length``) are per-car so heterogeneous drivers can be mixed;
+    the Intelligent Driver Model in :meth:`TrafficSim.step` reads them directly.
+    """
+
     id: int
     edge_id: int
     s: float        # position along edge, in [0, edge.length]
@@ -21,6 +31,12 @@ class Car:
     # in advance (before the stop line) so the signal can gate the specific
     # movement; ``None`` until the router decides. Reset to None on each transfer.
     next_edge: Optional[int] = None
+
+    # Destination node id for destination-based routing. ``None`` means "no
+    # destination" (the car wanders, e.g. under RandomRouter). A
+    # destination-aware router reads this to steer toward ``dest`` and assigns
+    # a fresh one when the car arrives.
+    dest: Optional[int] = None
 
     # Physical / behavioural parameters (per-car so they can be varied).
     max_speed: float = 50.0       # [m/s] hard cap on desired speed

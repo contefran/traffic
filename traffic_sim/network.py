@@ -18,6 +18,15 @@ DEFAULT_SPEED_LIMIT = 13.9
 
 @dataclass
 class Node:
+    """A grid intersection (graph vertex).
+
+    Carries both its integer grid indices ``(i, j)`` — which the H/V signal
+    model depends on and which stay fixed even when positions are jittered — and
+    its world position ``(x, y)`` in metres. ``out_edges`` / ``in_edges`` hold
+    the ids of edges leaving / entering this node (indices into
+    :attr:`RoadNetwork.edges`).
+    """
+
     id: int
     i: int  # grid column
     j: int  # grid row
@@ -29,6 +38,13 @@ class Node:
 
 @dataclass
 class Edge:
+    """A one-way road segment from node ``u`` to node ``v``.
+
+    ``length`` is in metres and ``speed_limit`` in m/s; a two-way street is
+    represented by two opposite ``Edge`` objects. ``lanes`` is carried for a
+    future multi-lane model but is not yet used by the dynamics.
+    """
+
     id: int
     u: int  # source node id
     v: int  # target node id
@@ -39,6 +55,14 @@ class Edge:
 
 @dataclass
 class RoadNetwork:
+    """A directed road graph plus the geometry needed to place cars on it.
+
+    ``nodes`` and ``edges`` are indexed by id (their list position); ``node_id``
+    maps a grid coordinate ``(i, j)`` to its node id. This object is the single
+    source of world geometry — a car's ``(x, y)`` always comes from
+    :meth:`point_on_edge`, never stored on the car.
+    """
+
     nodes: List[Node]
     edges: List[Edge]
     node_id: Dict[Tuple[int, int], int]  # (i, j) -> node id
@@ -75,6 +99,7 @@ def build_grid_network(width: int, height: int, block: float) -> RoadNetwork:
     edges: List[Edge] = []
 
     def add_edge(u: int, v: int) -> None:
+        """Append one directed edge ``u -> v`` and register it on both nodes."""
         n1, n2 = nodes[u], nodes[v]
         length = math.hypot(n2.x - n1.x, n2.y - n1.y)
         eid = len(edges)
@@ -106,6 +131,7 @@ def build_city_grid(
     seed: int = 0,
     jitter: float = 0.0,
     one_way_prob: float = 0.0,
+    drop_prob: float = 0.0,
     arterial_every: int = 0,
     arterial_speed: float = 25.0,
 ) -> RoadNetwork:
@@ -116,6 +142,11 @@ def build_city_grid(
       in x and y (the grid indices ``i, j`` are unchanged, only ``x, y`` move).
     * ``one_way_prob`` — probability a neighbour connection is one-way (a single
       directed edge) instead of the usual two-way pair.
+    * ``drop_prob`` — probability a neighbour connection is missing entirely (no
+      edge at all), so blocks need not be fully connected. Arterial links are
+      never dropped, which keeps the through-routes intact and the map mostly
+      connected. Raises topological irregularity without breaking the ``(i, j)``
+      indexing the signal model relies on.
     * ``arterial_every`` / ``arterial_speed`` — every ``arterial_every``-th row and
       column is an arterial whose edges get the higher ``arterial_speed`` limit.
 
@@ -137,6 +168,7 @@ def build_city_grid(
     edges: List[Edge] = []
 
     def add_edge(u: int, v: int, speed: float) -> None:
+        """Append one directed edge ``u -> v`` with the given speed limit."""
         n1, n2 = nodes[u], nodes[v]
         length = math.hypot(n2.x - n1.x, n2.y - n1.y)
         eid = len(edges)
@@ -144,7 +176,12 @@ def build_city_grid(
         nodes[u].out_edges.append(eid)
         nodes[v].in_edges.append(eid)
 
-    def connect(u: int, v: int, speed: float) -> None:
+    def connect(u: int, v: int, speed: float, arterial: bool) -> None:
+        """Connect neighbours ``u`` and ``v``, honouring ``drop_prob`` (skip the
+        connection) and ``one_way_prob`` (a single directed edge instead of a
+        two-way pair). Arterial connections are never dropped."""
+        if not arterial and drop_prob and rng.random() < drop_prob:
+            return
         if one_way_prob and rng.random() < one_way_prob:
             # One-way: keep a single direction (chosen at random).
             a, b = (u, v) if rng.random() < 0.5 else (v, u)
@@ -154,16 +191,94 @@ def build_city_grid(
             add_edge(v, u, speed)
 
     def is_arterial(index: int) -> bool:
+        """Whether grid row/column ``index`` is an arterial (higher speed)."""
         return arterial_every > 0 and index % arterial_every == 0
 
     for j in range(height):
         for i in range(width):
             u = node_id[(i, j)]
             if i + 1 < width:  # horizontal connection lies on row j
-                speed = arterial_speed if is_arterial(j) else DEFAULT_SPEED_LIMIT
-                connect(u, node_id[(i + 1, j)], speed)
+                art = is_arterial(j)
+                speed = arterial_speed if art else DEFAULT_SPEED_LIMIT
+                connect(u, node_id[(i + 1, j)], speed, art)
             if j + 1 < height:  # vertical connection lies on column i
-                speed = arterial_speed if is_arterial(i) else DEFAULT_SPEED_LIMIT
-                connect(u, node_id[(i, j + 1)], speed)
+                art = is_arterial(i)
+                speed = arterial_speed if art else DEFAULT_SPEED_LIMIT
+                connect(u, node_id[(i, j + 1)], speed, art)
+
+    # Repair connectivity: dropping edges / making them one-way can fragment the
+    # grid into pockets, leaving some destinations unreachable. Reconnect the
+    # graph two-way across grid-adjacent component boundaries until it is
+    # strongly connected, so any car can reach any destination. The undirected
+    # lattice is connected, so such a boundary pair always exists while >1
+    # component remains.
+    def grid_neighbours(node: Node):
+        """Yield the node ids of ``node``'s existing grid neighbours (E/W/N/S)."""
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nbr = node_id.get((node.i + di, node.j + dj))
+            if nbr is not None:
+                yield nbr
+
+    _make_strongly_connected(nodes, edges, grid_neighbours, add_edge)
 
     return RoadNetwork(nodes=nodes, edges=edges, node_id=node_id)
+
+
+def _strongly_connected_components(nodes: List[Node], edges: List[Edge]) -> List[int]:
+    """Component id per node via Kosaraju's algorithm (iterative)."""
+    n = len(nodes)
+    order: List[int] = []
+    seen = [False] * n
+    # First pass: finish-time order on the forward graph.
+    for start in range(n):
+        if seen[start]:
+            continue
+        stack = [(start, iter(nodes[start].out_edges))]
+        seen[start] = True
+        while stack:
+            node, it = stack[-1]
+            for eid in it:
+                w = edges[eid].v
+                if not seen[w]:
+                    seen[w] = True
+                    stack.append((w, iter(nodes[w].out_edges)))
+                    break
+            else:
+                order.append(node)
+                stack.pop()
+    # Second pass: DFS on the reverse graph in reverse finish order.
+    comp = [-1] * n
+    cid = 0
+    for start in reversed(order):
+        if comp[start] != -1:
+            continue
+        stack = [start]
+        comp[start] = cid
+        while stack:
+            node = stack.pop()
+            for eid in nodes[node].in_edges:  # reverse edges u -> node
+                u = edges[eid].u
+                if comp[u] == -1:
+                    comp[u] = cid
+                    stack.append(u)
+        cid += 1
+    return comp
+
+
+def _make_strongly_connected(nodes, edges, grid_neighbours, add_edge) -> None:
+    """Add two-way edges across grid-adjacent component boundaries until the
+    directed graph is a single strongly connected component."""
+    while True:
+        comp = _strongly_connected_components(nodes, edges)
+        if max(comp) == 0:  # one component
+            return
+        # Find the first grid-adjacent pair in different components and bridge it.
+        for node in nodes:
+            for nbr in grid_neighbours(node):
+                if comp[node.id] != comp[nbr]:
+                    add_edge(node.id, nbr, DEFAULT_SPEED_LIMIT)
+                    add_edge(nbr, node.id, DEFAULT_SPEED_LIMIT)
+                    break
+            else:
+                continue
+            break

@@ -41,3 +41,6 @@ htmlcov/
 *.mp4
 *.gif
 Plan.odt
+
+# Sphinx documentation build output
+docs/_build/

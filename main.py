@@ -5,10 +5,11 @@ import random
 from traffic_sim import (
     build_city_grid,
     Car,
-    RandomRouter,
+    ShortestPathRouter,
     TrafficSim,
     ProtectedPhaseController,
     SignalSystem,
+    PriorityModel,
     Visuals,
 )
 
@@ -24,16 +25,28 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
 
 
 def main() -> None:
+    """Build a heterogeneous city grid, populate it, and open the animation.
+
+    A worked example of wiring the pieces together: a jittered city grid with
+    one-way streets, dropped links and arterials; 60 cars; a
+    :class:`ShortestPathRouter` steering each to a destination; a
+    :class:`ProtectedPhaseController` on the signals; and a
+    :class:`PriorityModel` for right-of-way at any unsignalized node. Edit the
+    values here to experiment with grid size, density, ``dt`` and step count.
+    """
     net = build_city_grid(
         width=8, height=8, block=60.0,
-        seed=1, jitter=0.18, one_way_prob=0.15, arterial_every=3, arterial_speed=25.0,
+        seed=1, jitter=0.22, one_way_prob=0.15, drop_prob=0.12,
+        arterial_every=3, arterial_speed=25.0,
     )
     print(f"nodes={len(net.nodes)} edges={len(net.edges)}")
 
     cars = spawn_cars(net, n_cars=60, seed=1)
-    router = RandomRouter(net, seed=42)
+    router = ShortestPathRouter(net, seed=42)  # each car heads to a destination
     signals = SignalSystem(net, ProtectedPhaseController(green_time=5.0))
-    sim = TrafficSim(net, cars, router, signals=signals)
+    # Right-of-way at any unsignalized node (arterial priority + gap acceptance).
+    priority = PriorityModel(net)
+    sim = TrafficSim(net, cars, router, signals=signals, priority=priority)
 
     Visuals().animate_sim(net, sim, dt=0.1, steps=800)
 

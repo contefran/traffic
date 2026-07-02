@@ -36,8 +36,33 @@ def test_jitter_moves_positions_but_not_indices():
 
 def test_one_way_reduces_edge_count():
     two_way = build_city_grid(6, 6, block=50.0, seed=3, one_way_prob=0.0)
-    all_one_way = build_city_grid(6, 6, block=50.0, seed=3, one_way_prob=1.0)
-    assert len(all_one_way.edges) * 2 == len(two_way.edges)
+    mostly_one_way = build_city_grid(6, 6, block=50.0, seed=3, one_way_prob=1.0)
+    # One-way connections roughly halve the edge count; the repair pass may add
+    # a few two-way edges back to remove sinks/sources, so the result is fewer
+    # than the fully two-way grid but no less than half of it.
+    assert len(two_way.edges) // 2 <= len(mostly_one_way.edges) < len(two_way.edges)
+
+
+def test_drop_prob_removes_connections():
+    full = build_city_grid(6, 6, block=50.0, seed=3)
+    dropped = build_city_grid(6, 6, block=50.0, seed=3, drop_prob=0.3)
+    assert len(dropped.edges) < len(full.edges)
+
+
+def test_every_node_has_in_and_out_edge():
+    # Even at high drop/one-way rates the repair pass guarantees no node is a
+    # trap (no out-edge) or unreachable (no in-edge).
+    city = build_city_grid(8, 8, block=50.0, seed=1, jitter=0.2,
+                          one_way_prob=0.3, drop_prob=0.25, arterial_every=3)
+    assert all(n.out_edges and n.in_edges for n in city.nodes)
+
+
+def test_arterials_are_never_dropped():
+    # With drop_prob=1.0 only arterial links survive (they are never dropped),
+    # plus whatever the repair pass restores.
+    city = build_city_grid(6, 6, block=50.0, seed=3, drop_prob=1.0,
+                          arterial_every=2, arterial_speed=25.0)
+    assert any(e.speed_limit == 25.0 for e in city.edges)
 
 
 def test_arterials_get_higher_speed_limit():
