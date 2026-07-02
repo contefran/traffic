@@ -44,3 +44,7 @@ Plan.odt
 
 # Sphinx documentation build output
 docs/_build/
+
+# Plain-English codebase manual (local reference, not tracked)
+CODEBASE_GUIDE.md
+CODEBASE_GUIDE.pdf
