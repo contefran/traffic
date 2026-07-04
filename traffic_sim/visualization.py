@@ -95,15 +95,52 @@ class Visuals:
         ax.scatter(pos[:, 0], pos[:, 1], c=self._signal_colors(signals, t, specs),
                    s=16, marker="s", zorder=4)
 
+    def _signal_legend(self, ax) -> None:
+        """Add a key explaining the four signal squares drawn at each junction.
+
+        Each signalized node shows *four* squares — one per movement, not a
+        single light — which is easy to misread. This legend spells out which
+        square is which: the east (right-hand) pair is the E-W approach (lower =
+        through, upper = left); the north (top) pair is the N-S approach (left =
+        through, right = left). Exactly one square is green at a time under the
+        protected-phase controller (green = may go, red = stop). Anchored outside
+        the plot so it never covers traffic.
+        """
+        from matplotlib.lines import Line2D
+
+        def square(color, label):
+            return Line2D([], [], marker="s", linestyle="None", markersize=8,
+                          markerfacecolor=color, markeredgecolor="0.3", label=label)
+
+        handles = [
+            square("0.55", "top-left  =  N–S through"),
+            square("0.55", "top-right  =  N–S left"),
+            square("0.55", "right, lower  =  E–W through"),
+            square("0.55", "right, upper  =  E–W left"),
+            square(GREEN, "green  =  may go"),
+            square(RED, "red  =  stop"),
+        ]
+        ax.legend(handles=handles,
+                  title="Signal squares\n(4 per junction, 1 green at a time)",
+                  loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                  fontsize=8, title_fontsize=8, framealpha=0.95,
+                  borderaxespad=0.0)
+
     def render_state(self, net, cars=None, t: float = 0.0, signals=None,
                      path: str = "frame.png", title: str = None):
-        """Render a single headless frame to ``path`` (PNG). Returns the path."""
+        """Render a single headless frame to ``path`` (PNG). Returns the path.
+
+        When ``signals`` is given, a legend keys the four per-junction signal
+        squares (see :meth:`_signal_legend`); ``bbox_inches="tight"`` keeps it in
+        the saved image.
+        """
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net)
         ax.scatter([n.x for n in net.nodes], [n.y for n in net.nodes],
                    color="black", s=6, zorder=2)
         if signals is not None:
             self._draw_signals(ax, net, signals, t)
+            self._signal_legend(ax)
         if cars:
             xs, ys = zip(*(net.point_on_edge(c.edge_id, c.s) for c in cars))
             ax.scatter(xs, ys, s=55, color="tab:blue", zorder=5)
@@ -208,7 +245,7 @@ class Visuals:
         differ only in how they consume the returned animation. Runs for
         ``steps`` frames.
         """
-        fig, ax = plt.subplots(figsize=(6, 6))
+        fig, ax = plt.subplots(figsize=(8.6, 6))
         self._draw_edges(ax, net)
         min_x, min_y, max_x, max_y = net.bounds()
         ax.set_aspect("equal")
@@ -222,6 +259,9 @@ class Visuals:
             if positions:
                 pos = np.array(positions)
                 sig_scat = ax.scatter(pos[:, 0], pos[:, 1], s=16, marker="s", zorder=4)
+                self._signal_legend(ax)
+                # Reserve room on the right so the legend sits beside the map.
+                fig.subplots_adjust(left=0.06, right=0.66)
 
         scat = ax.scatter([], [], s=40, color="tab:blue", zorder=5)
 
