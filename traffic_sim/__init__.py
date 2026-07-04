@@ -18,7 +18,7 @@ from .signals import (
     SignalSystem,
 )
 from .priority import PriorityModel
-from .metrics import MetricsCollector, StepMetrics
+from .metrics import MetricsCollector, StepMetrics, TripMetrics
 from .units import kmh_to_ms, ms_to_kmh
 
 __all__ = [
@@ -40,6 +40,7 @@ __all__ = [
     "PriorityModel",
     "MetricsCollector",
     "StepMetrics",
+    "TripMetrics",
     "kmh_to_ms",
     "ms_to_kmh",
     "Visuals",
