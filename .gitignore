@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environments (this project's venv lives in the repo root)
+# Virtual environments
 .venv/
 venv/
 env/
@@ -40,11 +40,9 @@ htmlcov/
 # Project artifacts
 *.mp4
 *.gif
-Plan.odt
 
 # Sphinx documentation build output
 docs/_build/
 
-# Plain-English codebase manual (local reference, not tracked)
-CODEBASE_GUIDE.md
-CODEBASE_GUIDE.pdf
+# Plain-English codebase manual and open questions
+guides_plans/
