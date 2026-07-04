@@ -128,8 +128,13 @@ class ShortestPathRouter:
         raises. If the car has no destination or has just reached it, a fresh one
         is assigned. Returns the out-edge minimising ``edge_cost +
         cost_to_go(neighbour)``, ``None`` at a dead-end, or — when the
-        destination is unreachable from here — a random non-U-turn fallback so
-        the car keeps moving and re-routes next step.
+        destination is unreachable from here — a random fallback so the car keeps
+        moving and re-routes next step.
+
+        U-turns (reversing straight back down the approach edge) are forbidden:
+        the reverse edge is excluded from consideration unless the node is a
+        genuine dead-end where it is the only way out. (A roundabout would be the
+        other exemption, once node control types model one.)
         """
         if car is None:
             raise ValueError("ShortestPathRouter requires a car (it routes to car.dest)")
@@ -140,21 +145,25 @@ class ShortestPathRouter:
         if not options:
             return None  # dead-end
 
+        # Forbid U-turns: drop the edge that leads straight back to where we came
+        # from, unless it is the only option (a true dead-end).
+        forward = [eid for eid in options if self.net.edges[eid].v != edge.u]
+        candidates = forward or list(options)
+
         # No destination yet, or we've just arrived at it: pick a fresh one.
         if car.dest is None or car.dest == node:
             self.assign_destination(car, avoid=node)
 
         dist = self._dist_to(car.dest)
         best, best_cost = None, math.inf
-        for eid in options:
+        for eid in candidates:
             e = self.net.edges[eid]
             cost = self._cost(e) + dist.get(e.v, math.inf)
             if cost < best_cost:
                 best_cost, best = cost, eid
 
         if best is None or best_cost == math.inf:
-            # Destination unreachable from here: wander (avoid a U-turn) and
+            # Destination unreachable without a U-turn: wander forward and
             # re-route next step once we're somewhere with a path.
-            forward = [eid for eid in options if self.net.edges[eid].v != edge.u]
-            return self.rng.choice(forward or list(options))
+            return self.rng.choice(candidates)
         return best

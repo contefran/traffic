@@ -103,6 +103,22 @@ def test_dead_end_returns_none():
     assert nxt in net.nodes[top].out_edges
 
 
+def test_router_never_makes_u_turn_even_toward_destination():
+    # The destination sits directly behind the car (the node it just left), so a
+    # U-turn would be the single cheapest move. U-turns are forbidden, so the
+    # router must route around rather than reverse straight back.
+    net = build_grid_network(width=3, height=3, block=50.0)
+    router = ShortestPathRouter(net, seed=0)
+
+    behind = net.node_id[(1, 0)]
+    here = net.node_id[(1, 1)]
+    car = Car(id=0, edge_id=_edge_between(net, behind, here), s=0.0, v=0.0, dest=behind)
+
+    nxt = router.next_edge(car.edge_id, car)
+    assert net.edges[nxt].v != behind          # not the reverse (U-turn) edge
+    assert nxt in net.nodes[here].out_edges     # a genuine forward option
+
+
 def test_assigns_destination_when_missing():
     net = build_grid_network(width=3, height=3, block=50.0)
     router = ShortestPathRouter(net, seed=1)
