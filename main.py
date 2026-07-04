@@ -10,6 +10,7 @@ from traffic_sim import (
     ProtectedPhaseController,
     SignalSystem,
     PriorityModel,
+    MetricsCollector,
     Visuals,
 )
 
@@ -46,9 +47,15 @@ def main() -> None:
     signals = SignalSystem(net, ProtectedPhaseController(green_time=5.0))
     # Right-of-way at any unsignalized node (arterial priority + gap acceptance).
     priority = PriorityModel(net)
-    sim = TrafficSim(net, cars, router, signals=signals, priority=priority)
+    # Record flow diagnostics (speed, queues, throughput) every step.
+    metrics = MetricsCollector()
+    sim = TrafficSim(net, cars, router, signals=signals, priority=priority,
+                     metrics=metrics)
 
     Visuals().animate_sim(net, sim, dt=0.1, steps=800)
+
+    # The run is over (window closed or all steps done): report what it produced.
+    print("metrics:", sim.metrics.summary())
 
 
 if __name__ == "__main__":
