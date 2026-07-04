@@ -150,6 +150,12 @@ def build_city_grid(
     * ``arterial_every`` / ``arterial_speed`` — every ``arterial_every``-th row and
       column is an arterial whose edges get the higher ``arterial_speed`` limit.
 
+    Two add-only repair passes run last, so the resulting network always has
+    **no dead-ends** (every node can exit to at least two distinct neighbours, so
+    no arrival is forced into a U-turn) and is **strongly connected** (every
+    destination is reachable from everywhere). Only feasible on a genuine 2-D
+    grid (``width``, ``height`` >= 2); a degenerate 1xN line still has endpoints.
+
     Seeded, so a given set of arguments always yields the same network.
     """
     rng = random.Random(seed)
@@ -206,12 +212,6 @@ def build_city_grid(
                 speed = arterial_speed if art else DEFAULT_SPEED_LIMIT
                 connect(u, node_id[(i, j + 1)], speed, art)
 
-    # Repair connectivity: dropping edges / making them one-way can fragment the
-    # grid into pockets, leaving some destinations unreachable. Reconnect the
-    # graph two-way across grid-adjacent component boundaries until it is
-    # strongly connected, so any car can reach any destination. The undirected
-    # lattice is connected, so such a boundary pair always exists while >1
-    # component remains.
     def grid_neighbours(node: Node):
         """Yield the node ids of ``node``'s existing grid neighbours (E/W/N/S)."""
         for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -219,6 +219,15 @@ def build_city_grid(
             if nbr is not None:
                 yield nbr
 
+    # Two repair passes, both add-only (so the strong-connectivity guarantee
+    # established last survives the earlier one):
+    #  1. No dead-ends: guarantee every node can exit to >= 2 distinct nodes, so
+    #     an arriving car is never forced into a U-turn (drops / one-ways can
+    #     otherwise leave a node hanging off the grid by a single street).
+    #  2. Strong connectivity: dropping edges can still fragment the grid into
+    #     pockets; bridge grid-adjacent component boundaries two-way until the
+    #     graph is a single component, so any car can reach any destination.
+    _ensure_min_exit_degree(nodes, edges, grid_neighbours, add_edge)
     _make_strongly_connected(nodes, edges, grid_neighbours, add_edge)
 
     return RoadNetwork(nodes=nodes, edges=edges, node_id=node_id)
@@ -263,6 +272,32 @@ def _strongly_connected_components(nodes: List[Node], edges: List[Edge]) -> List
                     stack.append(u)
         cid += 1
     return comp
+
+
+def _ensure_min_exit_degree(nodes, edges, grid_neighbours, add_edge,
+                            min_neighbours: int = 2) -> None:
+    """Guarantee every node can exit to at least ``min_neighbours`` *distinct*
+    nodes, so no arrival is ever forced into a U-turn (a "dead-end street").
+
+    For each node short of the target, add two-way links to grid-adjacent
+    neighbours it does not already exit to, until it reaches the target or runs
+    out of grid neighbours (a node with fewer grid neighbours than the target —
+    only possible on a degenerate 1xN grid — is connected to all it has). One
+    forward pass suffices: edges are only ever added, so once a node meets the
+    target it stays there, and links added for a neighbour only help it too.
+    """
+    for node in nodes:
+        exits = {edges[eid].v for eid in node.out_edges}
+        neighbours = list(grid_neighbours(node))
+        target = min(min_neighbours, len(neighbours))
+        for nbr in neighbours:
+            if len(exits) >= target:
+                break
+            if nbr in exits:
+                continue
+            add_edge(node.id, nbr, DEFAULT_SPEED_LIMIT)
+            add_edge(nbr, node.id, DEFAULT_SPEED_LIMIT)
+            exits.add(nbr)
 
 
 def _make_strongly_connected(nodes, edges, grid_neighbours, add_edge) -> None:

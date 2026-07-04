@@ -57,6 +57,18 @@ def test_every_node_has_in_and_out_edge():
     assert all(n.out_edges and n.in_edges for n in city.nodes)
 
 
+def test_no_dead_ends_every_node_has_two_distinct_exits():
+    # The no-dead-end repair guarantees every node can leave toward >= 2 distinct
+    # nodes, so an arrival is never forced into a U-turn. Check across seeds and
+    # aggressive drop/one-way rates.
+    for seed in range(6):
+        city = build_city_grid(8, 8, block=50.0, seed=seed, jitter=0.2,
+                              one_way_prob=0.3, drop_prob=0.3, arterial_every=3)
+        for n in city.nodes:
+            exits = {city.edges[eid].v for eid in n.out_edges}
+            assert len(exits) >= 2, f"node {n.id} (seed {seed}) is a dead-end"
+
+
 def test_arterials_are_never_dropped():
     # With drop_prob=1.0 only arterial links survive (they are never dropped),
     # plus whatever the repair pass restores.
