@@ -18,6 +18,10 @@ DEFAULT_SPEED_LIMIT = 13.9
 # Lane width [m], used only to lay lanes out side by side for rendering.
 LANE_WIDTH = 3.5
 
+# Rendering-only offset for elevated (level-1) nodes, so overpasses draw beside
+# the ground road they cross rather than on top of it.
+LEVEL_OFFSET = 16.0
+
 
 @dataclass
 class Node:
@@ -25,9 +29,12 @@ class Node:
 
     Carries both its integer grid indices ``(i, j)`` — which the H/V signal
     model depends on and which stay fixed even when positions are jittered — and
-    its world position ``(x, y)`` in metres. ``out_edges`` / ``in_edges`` hold
-    the ids of edges leaving / entering this node (indices into
-    :attr:`RoadNetwork.edges`).
+    its world position ``(x, y)`` in metres. ``level`` is the grade: 0 = ground,
+    1 = elevated (an overpass). Two nodes can share an ``(x, y)`` at different
+    levels; because they are distinct nodes with no edge between them, the roads
+    *cross without connecting* — the whole basis of grade separation.
+    ``out_edges`` / ``in_edges`` hold the ids of edges leaving / entering this
+    node (indices into :attr:`RoadNetwork.edges`).
     """
 
     id: int
@@ -35,6 +42,7 @@ class Node:
     j: int  # grid row
     x: float
     y: float
+    level: int = 0  # 0 = ground, 1 = elevated
     out_edges: List[int] = field(default_factory=list)
     in_edges: List[int] = field(default_factory=list)
 
@@ -94,7 +102,11 @@ class RoadNetwork:
         # Right-hand perpendicular to the heading; lanes stack from the centre.
         px, py = dy, -dx
         offset = (lane - (e.lanes - 1) / 2.0) * LANE_WIDTH
-        return cx + px * offset, cy + py * offset
+        # Elevated level offset, interpolated so ramps slope up smoothly.
+        t = s / e.length
+        lvl = n1.level * (1.0 - t) + n2.level * t
+        lift = lvl * LEVEL_OFFSET
+        return cx + px * offset + lift, cy + py * offset + lift
 
     def bounds(self) -> Tuple[float, float, float, float]:
         """(min_x, min_y, max_x, max_y) over all nodes."""

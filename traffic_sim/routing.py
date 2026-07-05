@@ -92,6 +92,10 @@ class ShortestPathRouter:
         # along the final edge) rather than the intersection itself.
         self.edge_points = edge_points
         self.now = 0.0   # current sim time, refreshed by TrafficSim each step
+        # Valid destinations are ground nodes only (nobody parks on an elevated
+        # highway). Falls back to all nodes if levels aren't used.
+        self._dest_nodes = [nd.id for nd in net.nodes if nd.level == 0] or \
+            list(range(len(net.nodes)))
         # dest node id -> {node id: free-flow cost to reach dest}
         self._dist_cache: Dict[int, Dict[int, float]] = {}
 
@@ -144,11 +148,10 @@ class ShortestPathRouter:
         if self.demand is not None and avoid is not None:
             car.dest = self.demand.next_destination(avoid, self.now)
             return car.dest
-        n = len(self.net.nodes)
-        dest = self.rng.randrange(n)
-        if avoid is not None and n > 1:
+        dest = self.rng.choice(self._dest_nodes)
+        if avoid is not None and len(self._dest_nodes) > 1:
             while dest == avoid:
-                dest = self.rng.randrange(n)
+                dest = self.rng.choice(self._dest_nodes)
         car.dest = dest
         return dest
 

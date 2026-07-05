@@ -25,6 +25,7 @@ from traffic_sim import (
     PermissiveLeftModel,
     assign_zones,
     apply_zone_speeds,
+    add_grade_separated,
     DemandModel,
     ParkingModel,
     MetricsCollector,
@@ -75,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     net.add_argument("--ring-lanes", type=int, default=3, help="lanes on the ring")
     net.add_argument("--ring-access-spacing", type=float, default=1000.0,
                      help="metres between ring on/off ramps (>=1 per side)")
+    net.add_argument("--grade", action=argparse.BooleanOptionalAction, default=True,
+                     help="elevate the ring + a cross-city expressway (grade-separated)")
 
     demand = p.add_argument_group("demand & land use")
     demand.add_argument("--demand", action=argparse.BooleanOptionalAction, default=True,
@@ -130,9 +133,13 @@ def build_simulation(args):
         arterial_every=args.arterial_every,
         arterial_speed=kmh_to_ms(args.arterial_speed),
         arterial_lanes=args.arterial_lanes,
-        ring=args.ring, ring_speed=kmh_to_ms(args.ring_speed),
+        ring=args.ring and not args.grade,   # 2-D ring only when not elevated
+        ring_speed=kmh_to_ms(args.ring_speed),
         ring_lanes=args.ring_lanes, ring_access_spacing=args.ring_access_spacing,
     )
+    if args.grade:
+        add_grade_separated(net, block=args.block, speed=kmh_to_ms(args.ring_speed),
+                            lanes=args.ring_lanes, access_spacing=args.ring_access_spacing)
 
     # Land use drives demand, dwell times, and (optionally) residential speeds.
     zones = assign_zones(net, seed=args.seed)
@@ -149,14 +156,17 @@ def build_simulation(args):
     controller = (ProtectedPhaseController(green_time=args.green_time, yellow=args.yellow)
                   if args.controller == "protected"
                   else FixedTimeController(green_time=args.green_time, yellow=args.yellow))
-    # A ring road flows freely: unsignalize the perimeter so ring traffic never
-    # stops, and interior traffic yields to merge (the priority model gives the
-    # faster ring right of way). This keeps the fast ring physically coherent.
-    ring_nodes = None
-    if args.ring:
-        ring_nodes = {n.id for n in net.nodes
-                      if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
-    signals = SignalSystem(net, controller, unsignalized_nodes=ring_nodes)
+    # A ring/highway flows freely: unsignalize it so through traffic never stops,
+    # and lower-priority traffic yields to merge (the priority model gives the
+    # faster road right of way). Grade separation unsignalizes the whole elevated
+    # level; the 2-D ring unsignalizes the perimeter.
+    unsig = None
+    if args.grade:
+        unsig = {n.id for n in net.nodes if n.level == 1}
+    elif args.ring:
+        unsig = {n.id for n in net.nodes
+                 if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
+    signals = SignalSystem(net, controller, unsignalized_nodes=unsig)
     priority = PriorityModel(net) if args.priority else None
     left_turn = PermissiveLeftModel(net)   # inert under protected phasing
     parking = ParkingModel(seed=args.car_seed, zones=zones) if args.parking else None

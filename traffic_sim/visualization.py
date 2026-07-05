@@ -15,6 +15,7 @@ GREEN = "#2ca02c"
 YELLOW = "#e8a800"
 RED = "#d62728"
 ARTERIAL = "#1f77b4"
+ELEVATED = "#8c564b"   # elevated highway (overpasses)
 
 
 class Visuals:
@@ -36,24 +37,40 @@ class Visuals:
         a reverse partner are one-way and get a direction arrow so the asymmetry
         is visible; ``arrows=True`` forces (fainter) arrows on every edge.
         """
+        from .network import LEVEL_OFFSET
+
+        def pos(n):
+            off = n.level * LEVEL_OFFSET
+            return n.x + off, n.y + off
+
         pairs = {(e.u, e.v) for e in net.edges}
         for e in net.edges:
             n1, n2 = net.nodes[e.u], net.nodes[e.v]
-            arterial = e.speed_limit > DEFAULT_SPEED_LIMIT + 1e-6
-            ax.plot([n1.x, n2.x], [n1.y, n2.y],
-                    color=ARTERIAL if arterial else "black",
-                    linewidth=0.8 + 1.1 * e.lanes,   # thicker roads = more lanes
-                    solid_capstyle="round",
-                    zorder=1)
-            one_way = (e.v, e.u) not in pairs
-            if arrows or one_way:
-                ax.annotate(
-                    "", xytext=(n1.x, n1.y),
-                    xy=(n1.x + 0.6 * (n2.x - n1.x), n1.y + 0.6 * (n2.y - n1.y)),
-                    arrowprops=dict(arrowstyle="-|>", color="black",
-                                    alpha=0.35 if arrows else 0.7, lw=1.0),
-                    zorder=1,
-                )
+            (x1, y1), (x2, y2) = pos(n1), pos(n2)
+            lw = 0.8 + 1.1 * e.lanes
+            if n1.level == 1 and n2.level == 1:        # elevated road (overpass)
+                # white casing hides the ground road below, then the highway on top.
+                ax.plot([x1, x2], [y1, y2], color="white", linewidth=lw + 3.5,
+                        solid_capstyle="round", zorder=4)
+                ax.plot([x1, x2], [y1, y2], color=ELEVATED, linewidth=lw,
+                        solid_capstyle="round", zorder=5)
+            elif n1.level != n2.level:                 # ramp between levels
+                ax.plot([x1, x2], [y1, y2], color=ELEVATED, linewidth=1.6,
+                        linestyle=(0, (2, 1.5)), zorder=4)
+            else:                                       # ground street
+                arterial = e.speed_limit > DEFAULT_SPEED_LIMIT + 1e-6
+                ax.plot([x1, x2], [y1, y2],
+                        color=ARTERIAL if arterial else "black",
+                        linewidth=lw, solid_capstyle="round", zorder=1)
+                one_way = (e.v, e.u) not in pairs
+                if arrows or one_way:
+                    ax.annotate(
+                        "", xytext=(x1, y1),
+                        xy=(x1 + 0.6 * (x2 - x1), y1 + 0.6 * (y2 - y1)),
+                        arrowprops=dict(arrowstyle="-|>", color="black",
+                                        alpha=0.35 if arrows else 0.7, lw=1.0),
+                        zorder=1,
+                    )
 
     def _signal_specs(self, net, signals):
         """Per signalized node, four movement indicators: E-W through/left to the

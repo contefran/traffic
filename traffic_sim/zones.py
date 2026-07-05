@@ -45,6 +45,8 @@ def assign_zones(net, *, seed: int = 0, retail_fraction: float = 0.12,
 
     zones: ZoneMap = {}
     for n in net.nodes:
+        if n.level != 0:
+            continue  # you don't park on an elevated highway
         if rng.random() < retail_fraction:
             zones[n.id] = LandUse.RETAIL
             continue
