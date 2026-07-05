@@ -111,6 +111,16 @@ class ShortestPathRouter:
         self._dist_cache[dest] = dist
         return dist
 
+    def free_flow_time(self, origin: int, dest: int) -> float:
+        """Ideal (uncongested) travel time [s] from ``origin`` node to ``dest``.
+
+        The same cost-to-go used for routing — the fastest free-flow path, summing
+        each edge's ``length / speed_limit``. Metrics use it as the baseline a
+        trip's delay is measured against. Returns ``inf`` if ``dest`` is
+        unreachable from ``origin``.
+        """
+        return self._dist_to(dest).get(origin, math.inf)
+
     def assign_destination(self, car: Car, avoid: Optional[int] = None) -> int:
         """Give ``car`` a new random destination node (never ``avoid``)."""
         n = len(self.net.nodes)

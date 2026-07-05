@@ -12,13 +12,15 @@ from .routing import RandomRouter, ShortestPathRouter
 from .signals import (
     Orientation,
     TurnType,
+    SignalState,
     SignalPlan,
     FixedTimeController,
     ProtectedPhaseController,
     SignalSystem,
 )
 from .priority import PriorityModel
-from .metrics import MetricsCollector, StepMetrics
+from .metrics import MetricsCollector, StepMetrics, TripMetrics
+from .units import kmh_to_ms, ms_to_kmh
 
 __all__ = [
     "Node",
@@ -32,6 +34,7 @@ __all__ = [
     "ShortestPathRouter",
     "Orientation",
     "TurnType",
+    "SignalState",
     "SignalPlan",
     "FixedTimeController",
     "ProtectedPhaseController",
@@ -39,6 +42,9 @@ __all__ = [
     "PriorityModel",
     "MetricsCollector",
     "StepMetrics",
+    "TripMetrics",
+    "kmh_to_ms",
+    "ms_to_kmh",
     "Visuals",
 ]
 

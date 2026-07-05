@@ -126,7 +126,7 @@ def build_grid_network(width: int, height: int, block: float) -> RoadNetwork:
 def build_city_grid(
     width: int,
     height: int,
-    block: float = 50.0,
+    block: float = 150.0,
     *,
     seed: int = 0,
     jitter: float = 0.0,
@@ -149,6 +149,13 @@ def build_city_grid(
       indexing the signal model relies on.
     * ``arterial_every`` / ``arterial_speed`` — every ``arterial_every``-th row and
       column is an arterial whose edges get the higher ``arterial_speed`` limit.
+
+    ``block`` should be *physically coherent* with the speeds: a car must be able
+    to stop within a block, i.e. ``block`` comfortably larger than the braking
+    distance ``v^2 / (2 * comfortable_decel)``. At 50 km/h that is ~24 m and at
+    90 km/h ~78 m, so the ~150 m default keeps even fast arterials stoppable
+    before a signal; much shorter blocks put cars permanently in the dilemma zone
+    (they cannot stop at a light within a block) and manufacture collisions.
 
     Two add-only repair passes run last, so the resulting network always has
     **no dead-ends** (every node can exit to at least two distinct neighbours, so

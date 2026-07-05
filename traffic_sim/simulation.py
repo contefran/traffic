@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from .network import RoadNetwork
 from .vehicles import Car
 from .routing import RandomRouter
-from .signals import SignalSystem
+from .signals import SignalSystem, SignalState
 from .priority import PriorityModel
 
 # Hard safety buffer kept between a follower and its leader [m].
@@ -59,6 +59,10 @@ class TrafficSim:
         self.priority = priority
         self.metrics = metrics  # optional MetricsCollector; observes each step
         self.t = 0.0
+        # Genuine collisions: a car that could not stop in time even at its
+        # physical braking limit (would have overlapped its leader or crossed a
+        # red line). See the no-overlap constraint in :meth:`step`.
+        self.crashes = 0
 
     def _unsignalized(self, node_id: int) -> bool:
         """True if ``node_id`` has no active signal (so right-of-way applies)."""
@@ -114,12 +118,16 @@ class TrafficSim:
         In one pass: bucket cars by edge and sort each edge front-to-back;
         for each car compute its IDM acceleration against the most restrictive
         obstacle (its leader and/or a red stop line from signals or a
-        right-of-way yield), integrate speed and position, and clamp with a hard
-        backstop so it never passes its leader or crosses a red line. Cars that
-        reach the end of their edge are transferred to ``next_edge`` in a
-        deferred second pass (carrying the overshoot) so a moving car does not
-        disturb the ordering mid-step. Advances ``self.t`` and, if a metrics
-        collector is attached, records the new state.
+        right-of-way yield), cap deceleration at the car's physical limit
+        (``max_brake``), then integrate speed and position. A no-overlap
+        constraint still keeps a car from passing its leader or crossing a red
+        line; because braking is now physically bounded, hitting that constraint
+        means the car could not stop in time — a genuine collision, counted in
+        ``self.crashes`` (the position is still clamped, so cars never visually
+        overlap). Cars that reach the end of their edge are transferred to
+        ``next_edge`` in a deferred second pass (carrying the overshoot) so a
+        moving car does not disturb the ordering mid-step. Advances ``self.t``
+        and, if a metrics collector is attached, records the new state.
         """
         # Group cars by edge and sort each edge front (high s) -> back.
         cars_on_edge: Dict[int, List[Car]] = {}
@@ -147,11 +155,22 @@ class TrafficSim:
                 if car.next_edge is None:
                     car.next_edge = self.router.next_edge(edge_id, car)
 
-                red = (
-                    self.signals is not None
-                    and car.next_edge is not None
-                    and not self.signals.allows_movement(edge_id, car.next_edge, self.t)
-                )
+                red = False
+                if self.signals is not None and car.next_edge is not None:
+                    state = self.signals.movement_state(edge_id, car.next_edge, self.t)
+                    if state is SignalState.RED:
+                        red = True
+                    elif state is SignalState.YELLOW:
+                        # Clearance: stop unless the car physically cannot — i.e.
+                        # it could not halt before the line even at maximum
+                        # braking. Only then is it committed and proceeds (clears
+                        # on yellow instead of crashing the line). Using the
+                        # physical limit, rather than comfortable braking, keeps
+                        # cars from needlessly running the yellow into a
+                        # downstream queue.
+                        stop_dist = car.v * car.v / (2.0 * car.max_brake)
+                        if edge.length - car.s >= stop_dist:
+                            red = True
 
                 # At an unsignalized node the front car of an approach may have
                 # to yield right-of-way to conflicting higher-priority traffic.
@@ -175,18 +194,31 @@ class TrafficSim:
                 else:
                     a = self._idm_accel(car, v_des, None)
 
+                # Cap deceleration at the physical limit: a car cannot brake
+                # harder than its tyres grip. (Acceleration is bounded by the IDM
+                # free term already.) This is what makes an unavoidable overlap
+                # below a *genuine* collision rather than a teleport-stop artifact.
+                a = max(a, -car.max_brake)
+
                 car.v = max(0.0, min(v_des, car.v + a * dt))
                 new_s = car.s + car.v * dt
 
-                # Backstop: never overshoot the leader or cross a red stop line.
+                # No-overlap constraint: a car may never pass its leader or cross
+                # a red stop line. With deceleration now physically bounded,
+                # reaching this constraint means even maximum braking was not
+                # enough to stop in time — a real crash. We still clamp the
+                # position (cars never visually overlap) but count the collision
+                # and carry the leader's speed through (a rear-end, not a
+                # teleport to zero).
                 max_s = None
                 if leader is not None:
                     max_s = leader.s - car.length - LEADER_BUFFER
                 if red:
                     max_s = edge.length if max_s is None else min(max_s, edge.length)
                 if max_s is not None and new_s > max_s:
+                    self.crashes += 1
                     new_s = max(car.s, max_s)
-                    car.v = 0.0
+                    car.v = min(car.v, leader.v if leader is not None else 0.0)
 
                 # Reached the end of the edge.
                 if new_s >= edge.length:
