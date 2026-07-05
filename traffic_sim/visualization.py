@@ -42,7 +42,8 @@ class Visuals:
             arterial = e.speed_limit > DEFAULT_SPEED_LIMIT + 1e-6
             ax.plot([n1.x, n2.x], [n1.y, n2.y],
                     color=ARTERIAL if arterial else "black",
-                    linewidth=2.6 if arterial else 1.0,
+                    linewidth=0.8 + 1.1 * e.lanes,   # thicker roads = more lanes
+                    solid_capstyle="round",
                     zorder=1)
             one_way = (e.v, e.u) not in pairs
             if arrows or one_way:
@@ -148,7 +149,7 @@ class Visuals:
             self._draw_signals(ax, net, signals, t)
             self._signal_legend(ax)
         if cars:
-            xs, ys = zip(*(net.point_on_edge(c.edge_id, c.s) for c in cars))
+            xs, ys = zip(*(net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars))
             ax.scatter(xs, ys, s=55, color="tab:blue", zorder=5)
 
         min_x, min_y, max_x, max_y = net.bounds()
@@ -156,6 +157,38 @@ class Visuals:
         ax.set_xlim(min_x - 12, max_x + 12)
         ax.set_ylim(min_y - 12, max_y + 12)
         ax.set_title(title or f"t = {t:.1f}s")
+        fig.savefig(path, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
+    def render_zones(self, net, zones, path: str = "zones.png", title: str = None):
+        """Render the land-use map: nodes coloured by zone, with a legend.
+
+        ``zones`` is a ``{node_id: LandUse}`` map (see :mod:`traffic_sim.zones`).
+        Returns the PNG path.
+        """
+        from .zones import LandUse
+        from matplotlib.lines import Line2D
+
+        colors = {LandUse.RESIDENTIAL: "#2ca02c", LandUse.OFFICE: "#1f77b4",
+                  LandUse.RETAIL: "#ff7f0e", LandUse.OTHER: "#888888"}
+        fig, ax = plt.subplots(figsize=(7, 6))
+        self._draw_edges(ax, net)
+        for use, color in colors.items():
+            pts = [net.nodes[nid] for nid, u in zones.items() if u is use]
+            if pts:
+                ax.scatter([n.x for n in pts], [n.y for n in pts], s=45,
+                           color=color, edgecolors="white", linewidths=0.5, zorder=3)
+        handles = [Line2D([], [], marker="o", linestyle="None", markersize=8,
+                          markerfacecolor=colors[u], markeredgecolor="white",
+                          label=u.value) for u in LandUse if any(v is u for v in zones.values())]
+        ax.legend(handles=handles, title="land use", loc="upper left",
+                  bbox_to_anchor=(1.02, 1.0), fontsize=9, borderaxespad=0.0)
+        min_x, min_y, max_x, max_y = net.bounds()
+        ax.set_aspect("equal")
+        ax.set_xlim(min_x - 12, max_x + 12)
+        ax.set_ylim(min_y - 12, max_y + 12)
+        ax.set_title(title or "Land-use zones")
         fig.savefig(path, dpi=110, bbox_inches="tight")
         plt.close(fig)
         return path
@@ -181,6 +214,64 @@ class Visuals:
         ax_q.set_ylabel("queue length [cars]")
         ax_q.set_xlabel("time [s]")
         ax_v.set_title(title or "Traffic-flow metrics over time")
+        fig.tight_layout()
+        fig.savefig(path, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
+    def render_fundamental_diagram(self, metrics, net, path="fundamental.png",
+                                   title=None, max_points=8000):
+        """Plot the emergent fundamental diagram from per-edge samples.
+
+        Two panels over all ``(density, flow, speed)`` samples (one per occupied
+        edge per step; requires the collector's ``record_edges=True``): flow vs
+        density (coloured by speed) and speed vs density (coloured by flow). The
+        free-flow branch, the capacity peak and the congested branch appear
+        without being imposed. Returns the PNG path.
+        """
+        samples = metrics.fundamental_samples(net)
+        if not samples:
+            raise ValueError("no edge samples — build the collector with record_edges=True")
+        if len(samples) > max_points:                       # thin for legibility
+            stride = len(samples) // max_points + 1
+            samples = samples[::stride]
+        k = [s[0] for s in samples]
+        q = [s[1] for s in samples]
+        v = [s[2] for s in samples]
+
+        fig, (ax_q, ax_v) = plt.subplots(1, 2, figsize=(11, 4.5))
+        sc1 = ax_q.scatter(k, q, s=7, alpha=0.35, c=v, cmap="viridis")
+        ax_q.set_xlabel("density  k  [veh/km]")
+        ax_q.set_ylabel("flow  q = k·v  [veh/h]")
+        fig.colorbar(sc1, ax=ax_q, label="speed [km/h]")
+        sc2 = ax_v.scatter(k, v, s=7, alpha=0.35, c=q, cmap="magma")
+        ax_v.set_xlabel("density  k  [veh/km]")
+        ax_v.set_ylabel("speed  v  [km/h]")
+        fig.colorbar(sc2, ax=ax_v, label="flow [veh/h]")
+        fig.suptitle(title or "Fundamental diagram (emergent)")
+        fig.tight_layout()
+        fig.savefig(path, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
+    def render_delay_distribution(self, metrics, path="delay_dist.png",
+                                  title=None, bins=30):
+        """Histogram of per-trip delay with mean and p95 marked. Returns the path."""
+        delays = metrics.delays
+        if not delays:
+            raise ValueError("no completed trips — use a destination-aware router")
+        s = sorted(delays)
+        mean = sum(s) / len(s)
+        p95 = s[min(len(s) - 1, int(0.95 * len(s)))]
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.hist(delays, bins=bins, color="tab:blue", edgecolor="white")
+        ax.axvline(mean, color="tab:red", lw=2, label=f"mean {mean:.1f} s")
+        ax.axvline(p95, color="tab:orange", lw=2, ls="--", label=f"p95 {p95:.1f} s")
+        ax.set_xlabel("per-trip delay [s]")
+        ax.set_ylabel("trips")
+        ax.set_title(title or f"Trip delay distribution ({len(delays)} trips)")
+        ax.legend()
         fig.tight_layout()
         fig.savefig(path, dpi=110, bbox_inches="tight")
         plt.close(fig)
@@ -232,7 +323,7 @@ class Visuals:
                    color="red", s=10, zorder=3)
 
         if cars:
-            xs, ys = zip(*(net.point_on_edge(c.edge_id, c.s) for c in cars))
+            xs, ys = zip(*(net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars))
             ax.scatter(xs, ys, s=50)
 
         ax.set_aspect("equal")
@@ -279,7 +370,7 @@ class Visuals:
         def update(frame):
             """Advance the sim one step and redraw cars (and signal colours)."""
             sim.step(dt)
-            points = [net.point_on_edge(c.edge_id, c.s) for c in sim.cars]
+            points = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in sim.cars]
             scat.set_offsets(np.array(points) if points else np.empty((0, 2)))
             if sig_scat is not None:
                 sig_scat.set_color(self._signal_colors(signals, sim.t, specs))

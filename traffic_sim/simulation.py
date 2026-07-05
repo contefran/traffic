@@ -22,6 +22,13 @@ LEADER_BUFFER = 0.1
 # IDM free-acceleration exponent (standard value).
 IDM_DELTA = 4.0
 
+# Lane-change model (MOBIL-style): the acceleration gain a change must beat to be
+# worth it, the hardest braking it may impose on the target lane's follower, and
+# a small bonus that biases cars back toward the right (lower-index) lane.
+LANE_CHANGE_MIN_GAIN = 0.2      # [m/s^2]
+LANE_CHANGE_SAFE_BRAKE = 4.0    # [m/s^2]
+KEEP_RIGHT_BONUS = 0.3          # [m/s^2]
+
 
 class TrafficSim:
     """The mutable simulation state and its single-step update.
@@ -41,6 +48,8 @@ class TrafficSim:
         router: Optional[RandomRouter] = None,
         signals: Optional[SignalSystem] = None,
         priority: Optional[PriorityModel] = None,
+        left_turn=None,
+        parking=None,
         metrics=None,
     ) -> None:
         """Wire up the simulation.
@@ -48,8 +57,9 @@ class TrafficSim:
         ``router`` defaults to a :class:`RandomRouter` over ``net``. ``signals``
         of ``None`` means every approach is always green; ``priority`` of
         ``None`` means unsignalized nodes are an unchecked free-for-all;
-        ``metrics`` of ``None`` means nothing is recorded. ``cars`` is mutated in
-        place as the simulation runs.
+        ``left_turn`` of ``None`` means permissive lefts turn freely (no yielding
+        to oncoming); ``metrics`` of ``None`` means nothing is recorded. ``cars``
+        is mutated in place as the simulation runs.
         """
         self.net = net
         self.cars = cars
@@ -57,12 +67,18 @@ class TrafficSim:
         self.signals = signals  # None => no signals, every approach is green
         # Right-of-way at unsignalized nodes; None => no yielding (free-for-all).
         self.priority = priority
+        # Permissive-left gap acceptance at signalized nodes; None => free lefts.
+        self.left_turn = left_turn
+        # Park-and-dwell lifecycle; None => cars sail through destinations.
+        self.parking = parking
         self.metrics = metrics  # optional MetricsCollector; observes each step
         self.t = 0.0
         # Genuine collisions: a car that could not stop in time even at its
         # physical braking limit (would have overlapped its leader or crossed a
         # red line). See the no-overlap constraint in :meth:`step`.
         self.crashes = 0
+        # Only run the lane-change pass if some edge actually has >1 lane.
+        self._has_multilane = any(e.lanes > 1 for e in net.edges)
 
     def _unsignalized(self, node_id: int) -> bool:
         """True if ``node_id`` has no active signal (so right-of-way applies)."""
@@ -112,11 +128,76 @@ class TrafficSim:
         gap = max(gap, 0.01)  # guard against division blow-up at zero gap
         return car.accel * (free - (s_star / gap) ** 2)
 
+    @staticmethod
+    def _lane_neighbours(car: Car, lst: List[Car]):
+        """Nearest ``(leader ahead, follower behind)`` of ``car`` in a lane list
+        sorted front-first (high ``s`` -> low). ``car`` itself is skipped."""
+        leader = follower = None
+        for other in lst:
+            if other is car:
+                continue
+            if other.s > car.s:
+                leader = other          # nearest ahead = last one still ahead
+            else:
+                follower = other        # first one behind
+                break
+        return leader, follower
+
+    @staticmethod
+    def _gap_obstacle(s: float, length: float, lead: Optional[Car]):
+        """`(gap, lead_speed)` from a car at ``s`` to ``lead``, or ``None``."""
+        return None if lead is None else (lead.s - s - length, lead.v)
+
+    def _plan_lane_changes(self, cars_on_lane: Dict[Tuple[int, int], List[Car]]) -> List[Tuple[Car, int]]:
+        """Decide lane changes (MOBIL-style), evaluated on the current state.
+
+        A car moves to an adjacent lane when it gains acceleration there
+        (``a_new - a_old`` beats :data:`LANE_CHANGE_MIN_GAIN`, plus a keep-right
+        bonus) *and* it is safe — it fits ahead of that lane's leader and does not
+        force that lane's follower to brake harder than
+        :data:`LANE_CHANGE_SAFE_BRAKE`. Returns a list of ``(car, new_lane)``.
+        """
+        changes: List[Tuple[Car, int]] = []
+        for (edge_id, _lane), lst in cars_on_lane.items():
+            edge = self.net.edges[edge_id]
+            if edge.lanes <= 1:
+                continue
+            for car in lst:
+                v_des = min(edge.speed_limit, car.max_speed)
+                cur_leader, _ = self._lane_neighbours(car, lst)
+                a_old = self._idm_accel(car, v_des,
+                                        self._gap_obstacle(car.s, car.length, cur_leader))
+                best_lane, best_gain = car.lane, LANE_CHANGE_MIN_GAIN
+                for target in (car.lane - 1, car.lane + 1):
+                    if not 0 <= target < edge.lanes:
+                        continue
+                    leader, follower = self._lane_neighbours(
+                        car, cars_on_lane.get((edge_id, target), ()))
+                    if leader is not None and leader.s - car.s - car.length < LEADER_BUFFER:
+                        continue                                     # would overlap ahead
+                    if follower is not None:
+                        gap = car.s - follower.s - follower.length
+                        if gap < LEADER_BUFFER:
+                            continue                                 # would overlap behind
+                        fv_des = min(edge.speed_limit, follower.max_speed)
+                        if self._idm_accel(follower, fv_des, (gap, car.v)) < -LANE_CHANGE_SAFE_BRAKE:
+                            continue                                 # cuts the follower off
+                    a_new = self._idm_accel(car, v_des,
+                                            self._gap_obstacle(car.s, car.length, leader))
+                    gain = a_new - a_old + (KEEP_RIGHT_BONUS if target < car.lane else 0.0)
+                    if gain > best_gain:
+                        best_gain, best_lane = gain, target
+                if best_lane != car.lane:
+                    changes.append((car, best_lane))
+        return changes
+
     def step(self, dt: float) -> None:
         """Advance the whole simulation by ``dt`` seconds.
 
-        In one pass: bucket cars by edge and sort each edge front-to-back;
-        for each car compute its IDM acceleration against the most restrictive
+        In one pass: bucket cars by ``(edge, lane)`` and sort each lane
+        front-to-back (a car follows only the leader in its own lane); also keep
+        by-edge buckets for the intersection logic. For each car compute its IDM
+        acceleration against the most restrictive
         obstacle (its leader and/or a red stop line from signals or a
         right-of-way yield), cap deceleration at the car's physical limit
         (``max_brake``), then integrate speed and position. A no-overlap
@@ -129,38 +210,82 @@ class TrafficSim:
         moving car does not disturb the ordering mid-step. Advances ``self.t``
         and, if a metrics collector is attached, records the new state.
         """
-        # Group cars by edge and sort each edge front (high s) -> back.
+        # Keep the router's clock in sync so a time-of-day demand model can pick
+        # destinations for the current moment (a no-op for time-agnostic routers).
+        self.router.now = self.t
+
+        # Wake pass: parked cars whose dwell is over re-enter the flow and pick a
+        # fresh (time-appropriate) destination from where they are parked.
+        if self.parking is not None:
+            for car in self.cars:
+                if not car.active and self.t >= car.wake_t:
+                    car.active = True
+                    car.next_edge = None
+                    if hasattr(self.router, "assign_destination"):
+                        self.router.assign_destination(
+                            car, avoid=self.net.edges[car.edge_id].v)
+
+        # Group *active* cars by edge (all lanes) for intersection logic, and by
+        # (edge, lane) for car-following. Each list is sorted front (high s) -> back.
         cars_on_edge: Dict[int, List[Car]] = {}
+        cars_on_lane: Dict[Tuple[int, int], List[Car]] = {}
         for car in self.cars:
+            if not car.active:
+                continue  # parked cars are off the road
             cars_on_edge.setdefault(car.edge_id, []).append(car)
+            cars_on_lane.setdefault((car.edge_id, car.lane), []).append(car)
         for lst in cars_on_edge.values():
             lst.sort(key=lambda c: c.s, reverse=True)
+        for lst in cars_on_lane.values():
+            lst.sort(key=lambda c: c.s, reverse=True)
+
+        # Lane-change pass (overtaking): decide on the current state, apply, then
+        # rebuild the lane buckets so the movement pass sees the new lanes.
+        if self._has_multilane:
+            changes = self._plan_lane_changes(cars_on_lane)
+            if changes:
+                for car, new_lane in changes:
+                    car.lane = new_lane
+                cars_on_lane = {}
+                for car in self.cars:
+                    cars_on_lane.setdefault((car.edge_id, car.lane), []).append(car)
+                for lst in cars_on_lane.values():
+                    lst.sort(key=lambda c: c.s, reverse=True)
 
         # Right-of-way contest data at unsignalized nodes (empty if disabled).
         fronts = self._approach_fronts(cars_on_edge) if self.priority is not None else {}
 
         # Defer edge transfers so a car moving to a new edge does not disturb
         # the leader/follower ordering of the edge currently being processed.
-        transfers: List[tuple] = []  # (car, next_edge_id, new_s)
+        transfers: List[tuple] = []  # (car, next_edge_id, new_s, new_lane)
 
-        for edge_id, lst in cars_on_edge.items():
+        for (edge_id, _lane), lst in cars_on_lane.items():
             edge = self.net.edges[edge_id]
 
             for idx, car in enumerate(lst):
-                leader = lst[idx - 1] if idx > 0 else None
+                leader = lst[idx - 1] if idx > 0 else None  # nearest in same lane
                 v_des = min(edge.speed_limit, car.max_speed)
 
                 # Commit the next edge in advance so the signal can gate this
                 # car's specific movement (e.g. a protected left vs a through).
-                if car.next_edge is None:
+                # With parking on, a car that has reached its destination edge
+                # does not route onward — it keeps ``next_edge = None`` so it
+                # stops at the node and is parked in the pass below.
+                arriving = (self.parking is not None and car.dest is not None
+                            and edge.v == car.dest)
+                # The destination point along this final edge (mid-block if
+                # ``dest_frac`` < 1, else the node); the car stops here.
+                stop_pos = edge.length * car.dest_frac if arriving else None
+                if car.next_edge is None and not arriving:
                     car.next_edge = self.router.next_edge(edge_id, car)
 
                 red = False
+                sig_state = None
                 if self.signals is not None and car.next_edge is not None:
-                    state = self.signals.movement_state(edge_id, car.next_edge, self.t)
-                    if state is SignalState.RED:
+                    sig_state = self.signals.movement_state(edge_id, car.next_edge, self.t)
+                    if sig_state is SignalState.RED:
                         red = True
-                    elif state is SignalState.YELLOW:
+                    elif sig_state is SignalState.YELLOW:
                         # Clearance: stop unless the car physically cannot — i.e.
                         # it could not halt before the line even at maximum
                         # braking. Only then is it committed and proceeds (clears
@@ -172,6 +297,17 @@ class TrafficSim:
                         if edge.length - car.s >= stop_dist:
                             red = True
 
+                # Permissive left: a front left-turner on a *full* green must
+                # yield to imminent oncoming through traffic (inert under
+                # protected phasing, where that traffic is red). A car committing
+                # on yellow is past the point of no return and is not gated here.
+                if (self.left_turn is not None and idx == 0
+                        and sig_state is SignalState.GREEN
+                        and car.next_edge is not None
+                        and self.left_turn.must_yield(edge_id, car.next_edge,
+                                                      self.signals, self.t, cars_on_edge)):
+                    red = True
+
                 # At an unsignalized node the front car of an approach may have
                 # to yield right-of-way to conflicting higher-priority traffic.
                 if (self.priority is not None and idx == 0
@@ -180,13 +316,16 @@ class TrafficSim:
                                                      fronts.get(edge.v, []))):
                     red = True
 
-                # Constraints ahead, each (gap, speed): the leader and/or, on
-                # red, the stop line at the end of the edge (a stopped object).
+                # Constraints ahead, each (gap, speed): the leader, a red stop
+                # line at the end of the edge, and/or (when arriving) the
+                # destination point mid-block — all stationary obstacles.
                 obstacles = []
                 if leader is not None:
                     obstacles.append((leader.s - car.s - car.length, leader.v))
                 if red:
                     obstacles.append((edge.length - car.s, 0.0))
+                if stop_pos is not None:
+                    obstacles.append((stop_pos - car.s, 0.0))
 
                 # Most restrictive (smallest) IDM acceleration over obstacles.
                 if obstacles:
@@ -215,6 +354,8 @@ class TrafficSim:
                     max_s = leader.s - car.length - LEADER_BUFFER
                 if red:
                     max_s = edge.length if max_s is None else min(max_s, edge.length)
+                if stop_pos is not None:
+                    max_s = stop_pos if max_s is None else min(max_s, stop_pos)
                 if max_s is not None and new_s > max_s:
                     self.crashes += 1
                     new_s = max(car.s, max_s)
@@ -227,19 +368,36 @@ class TrafficSim:
                         car.v = 0.0
                     elif not red:
                         overshoot = new_s - edge.length
-                        next_len = self.net.edges[car.next_edge].length
-                        transfers.append((car, car.next_edge, min(overshoot, next_len)))
+                        next_edge = self.net.edges[car.next_edge]
+                        # Merge into a valid lane on the next edge (clamp index).
+                        new_lane = min(car.lane, next_edge.lanes - 1)
+                        transfers.append((car, car.next_edge,
+                                          min(overshoot, next_edge.length), new_lane))
                         continue  # applied in the transfer pass
                     # If red, fall through: the car waits at the stop line.
 
                 car.s = new_s
                 car.trail.append((self.t, car.edge_id, car.s))
 
-        for car, next_edge, new_s in transfers:
+        for car, next_edge, new_s, new_lane in transfers:
             car.edge_id = next_edge
             car.next_edge = None  # re-route from the new edge next step
             car.s = new_s
+            car.lane = new_lane
             car.trail.append((self.t, car.edge_id, car.s))
+
+        # Park pass: a car halted at its destination node goes inactive for a
+        # dwell (the wake pass re-enters it later with a fresh destination).
+        if self.parking is not None:
+            for car in self.cars:
+                if not car.active or car.dest is None or car.next_edge is not None:
+                    continue
+                edge = self.net.edges[car.edge_id]
+                stop_pos = edge.length * car.dest_frac      # mid-block if <1
+                if (edge.v == car.dest and car.v <= 0.5
+                        and stop_pos - car.s <= 3.0):
+                    car.active = False
+                    car.wake_t = self.t + self.parking.dwell_time(car.dest)
 
         self.t += dt
 

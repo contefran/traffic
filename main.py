@@ -22,6 +22,11 @@ from traffic_sim import (
     FixedTimeController,
     SignalSystem,
     PriorityModel,
+    PermissiveLeftModel,
+    assign_zones,
+    apply_zone_speeds,
+    DemandModel,
+    ParkingModel,
     MetricsCollector,
     kmh_to_ms,
     ms_to_kmh,
@@ -35,7 +40,8 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
     cars = []
     for i in range(n_cars):
         edge = rng.choice(net.edges)
-        cars.append(Car(id=i, edge_id=edge.id, s=rng.uniform(0.0, edge.length), v=0.0))
+        cars.append(Car(id=i, edge_id=edge.id, s=rng.uniform(0.0, edge.length),
+                        v=0.0, lane=rng.randrange(edge.lanes)))
     return cars
 
 
@@ -61,6 +67,26 @@ def build_parser() -> argparse.ArgumentParser:
                      help="every Nth row/column is an arterial (0 = none)")
     net.add_argument("--arterial-speed", type=float, default=70.0,
                      help="arterial speed limit [km/h]")
+    net.add_argument("--arterial-lanes", type=int, default=2, help="lanes per arterial")
+    net.add_argument("--ring", action=argparse.BooleanOptionalAction, default=True,
+                     help="make the perimeter a fast multi-lane ring road")
+    net.add_argument("--ring-speed", type=float, default=100.0,
+                     help="ring speed limit [km/h]")
+    net.add_argument("--ring-lanes", type=int, default=3, help="lanes on the ring")
+    net.add_argument("--ring-access-spacing", type=float, default=1000.0,
+                     help="metres between ring on/off ramps (>=1 per side)")
+
+    demand = p.add_argument_group("demand & land use")
+    demand.add_argument("--demand", action=argparse.BooleanOptionalAction, default=True,
+                        help="time-of-day zone-based destinations (else uniform random)")
+    demand.add_argument("--parking", action=argparse.BooleanOptionalAction, default=True,
+                        help="cars park at destinations and reappear after a dwell")
+    demand.add_argument("--day-length", type=float, default=600.0,
+                        help="simulated seconds in one day (four periods)")
+    demand.add_argument("--residential-speed", action=argparse.BooleanOptionalAction,
+                        default=True, help="slow local streets in residential zones to 30 km/h")
+    demand.add_argument("--edge-points", action=argparse.BooleanOptionalAction,
+                        default=True, help="destinations are mid-block points, not junctions")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=60, help="number of cars")
@@ -103,19 +129,40 @@ def build_simulation(args):
         one_way_prob=args.one_way_prob, drop_prob=args.drop_prob,
         arterial_every=args.arterial_every,
         arterial_speed=kmh_to_ms(args.arterial_speed),
+        arterial_lanes=args.arterial_lanes,
+        ring=args.ring, ring_speed=kmh_to_ms(args.ring_speed),
+        ring_lanes=args.ring_lanes, ring_access_spacing=args.ring_access_spacing,
     )
 
+    # Land use drives demand, dwell times, and (optionally) residential speeds.
+    zones = assign_zones(net, seed=args.seed)
+    if args.residential_speed:
+        apply_zone_speeds(net, zones)
+
+    demand = (DemandModel(net, zones, seed=args.router_seed, day_length=args.day_length)
+              if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
-    router = (ShortestPathRouter(net, seed=args.router_seed) if args.router == "shortest"
+    router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
+                                 edge_points=args.edge_points)
+              if args.router == "shortest"
               else RandomRouter(net, seed=args.router_seed))
     controller = (ProtectedPhaseController(green_time=args.green_time, yellow=args.yellow)
                   if args.controller == "protected"
                   else FixedTimeController(green_time=args.green_time, yellow=args.yellow))
-    signals = SignalSystem(net, controller)
+    # A ring road flows freely: unsignalize the perimeter so ring traffic never
+    # stops, and interior traffic yields to merge (the priority model gives the
+    # faster ring right of way). This keeps the fast ring physically coherent.
+    ring_nodes = None
+    if args.ring:
+        ring_nodes = {n.id for n in net.nodes
+                      if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
+    signals = SignalSystem(net, controller, unsignalized_nodes=ring_nodes)
     priority = PriorityModel(net) if args.priority else None
+    left_turn = PermissiveLeftModel(net)   # inert under protected phasing
+    parking = ParkingModel(seed=args.car_seed, zones=zones) if args.parking else None
     metrics = MetricsCollector()
     sim = TrafficSim(net, cars, router, signals=signals, priority=priority,
-                     metrics=metrics)
+                     left_turn=left_turn, parking=parking, metrics=metrics)
     return net, sim
 
 

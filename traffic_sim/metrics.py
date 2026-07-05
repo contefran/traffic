@@ -12,7 +12,7 @@ call ``record(sim)`` yourself in a custom loop.
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # A car slower than this is treated as queued/stopped [m/s].
 STOPPED_SPEED = 0.5
@@ -88,6 +88,15 @@ class MetricsCollector:
     crashes: int = 0            # genuine collisions (from TrafficSim.crashes)
     max_decel: float = 0.0      # peak observed deceleration [m/s^2]
     fuel_proxy: float = 0.0     # cumulative fuel/emissions surrogate [proxy units]
+    # Per-edge time series (opt-in): one ``{edge_id: (count, mean_speed)}``
+    # snapshot per step, for occupied edges only — the spatiotemporal substrate
+    # the flow-prediction model trains on. Off by default to avoid the overhead.
+    record_edges: bool = False
+    edge_history: List[Dict[int, Tuple[int, float]]] = field(default_factory=list)
+    # Per-intersection throughput (cars crossing each node) and cumulative wait
+    # (stopped vehicle-seconds on that node's approaches) — localizes congestion.
+    node_crossings: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
+    node_wait: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
     _last_edge: Dict[int, int] = field(default_factory=dict)
     _last_v: Dict[int, float] = field(default_factory=dict)
     # Per-car in-progress trip state.
@@ -106,9 +115,12 @@ class MetricsCollector:
         :class:`TripMetrics` whenever a car reaches its destination. Call once
         per step, after the step has advanced.
         """
-        cars = sim.cars
         t = sim.t
         dt = (t - self._last_t) if self._last_t is not None else 0.0
+        # Road aggregates cover cars actually in the flow; parked (inactive) cars
+        # are off the road and excluded. Trip tracking below still sees them all,
+        # so a car parking counts as an arrival.
+        cars = [c for c in sim.cars if getattr(c, "active", True)]
 
         speeds = [c.v for c in cars]
         mean_speed = sum(speeds) / len(speeds) if speeds else 0.0
@@ -120,7 +132,12 @@ class MetricsCollector:
             if prev is not None and prev != c.edge_id:
                 crossings += 1
                 self.edge_crossings[prev] += 1
+                self.node_crossings[sim.net.edges[prev].v] += 1  # crossed this node
             self._last_edge[c.id] = c.edge_id
+
+            # Time spent stopped counts as wait at the node this edge leads into.
+            if dt > 0 and c.v <= self.stopped_speed:
+                self.node_wait[sim.net.edges[c.edge_id].v] += dt
 
             # Peak deceleration (a sanity check on the physical brake cap) and a
             # fuel/emissions proxy, from this car's acceleration since last step.
@@ -139,8 +156,16 @@ class MetricsCollector:
         # A destination-aware router exposes free_flow_time; without it (a
         # wandering router) cars have no destination and no trips are produced.
         free_flow = getattr(sim.router, "free_flow_time", None)
-        for c in cars:
+        for c in sim.cars:                       # all cars, so parking = arrival
             self._update_trip(c, sim, t, dt, free_flow)
+
+        if self.record_edges:
+            acc: Dict[int, Tuple[int, float]] = {}
+            for c in cars:
+                cnt, ssum = acc.get(c.edge_id, (0, 0.0))
+                acc[c.edge_id] = (cnt + 1, ssum + c.v)
+            self.edge_history.append(
+                {e: (cnt, ssum / cnt) for e, (cnt, ssum) in acc.items()})
 
         self.history.append(StepMetrics(t, mean_speed, n_stopped, crossings))
         self._last_t = t
@@ -163,22 +188,44 @@ class MetricsCollector:
                 "stops": 0, "stopped_time": 0.0,
                 "was_stopped": car.v <= self.stopped_speed, "armed": False}
 
+    def _finalize_trip(self, car, state, t: float) -> None:
+        """Append a completed :class:`TripMetrics` from ``state`` (skips a trip
+        whose free-flow baseline is unknown)."""
+        if state["free_flow"] is None:
+            return
+        travel = t - state["start_t"]
+        self.trips.append(TripMetrics(
+            car_id=car.id, start_t=state["start_t"], end_t=t,
+            travel_time=travel, free_flow_time=state["free_flow"],
+            # Clamp at 0: an edge-point stops just before its node, so the
+            # node-based baseline can marginally exceed the actual time.
+            delay=max(0.0, travel - state["free_flow"]),
+            stops=state["stops"], stopped_time=state["stopped_time"]))
+
     def _update_trip(self, car, sim, t: float, dt: float, free_flow) -> None:
         """Advance one car's trip tracking for this step.
 
-        A trip completes on **arrival** — the car is now on an edge *leaving* its
-        target node (``edge.u == target``), which is the true geometric arrival
-        (the router reassigns the destination one edge earlier, so watching
-        ``car.dest`` would end the trip too soon). The ``armed`` guard requires
-        the car to have left the target's vicinity first, so a freshly opened
-        trip cannot complete instantly. On arrival, finalise the leg into
-        :attr:`trips` and open the next one toward the already-reassigned
-        ``car.dest``. Between boundaries, accumulate stops (moving -> halted
-        transitions) and time spent stopped.
+        A trip completes on **arrival**. Under park-and-dwell that is the moment
+        the car goes inactive (parks at its destination). Otherwise (sail-through)
+        it is when the car reaches an edge *leaving* its target node (``edge.u ==
+        target``) — the router reassigns the destination one edge early, so
+        watching ``car.dest`` would end the trip too soon, and the ``armed`` guard
+        stops a freshly opened trip completing instantly. On arrival, finalise the
+        leg and open the next one; while parked, no trip is tracked (so dwell time
+        never counts as travel time). Between boundaries, accumulate stops and
+        stopped time.
         """
         state = self._trip.get(car.id)
+
+        if not getattr(car, "active", True):
+            # Parked: the trip in progress just completed on arrival.
+            if state is not None:
+                self._finalize_trip(car, state, t)
+                self._trip[car.id] = None
+            return
+
         if state is None:
-            if car.dest is not None:  # begin tracking once there is a destination
+            if car.dest is not None:  # begin (or restart after waking) a trip
                 self._trip[car.id] = self._open_trip(car, sim, t, car.dest, free_flow)
             return
 
@@ -187,13 +234,7 @@ class MetricsCollector:
             if cur_u != state["target"]:
                 state["armed"] = True
         elif cur_u == state["target"] and car.dest is not None:
-            if state["free_flow"] is not None:
-                travel = t - state["start_t"]
-                self.trips.append(TripMetrics(
-                    car_id=car.id, start_t=state["start_t"], end_t=t,
-                    travel_time=travel, free_flow_time=state["free_flow"],
-                    delay=travel - state["free_flow"],
-                    stops=state["stops"], stopped_time=state["stopped_time"]))
+            self._finalize_trip(car, state, t)
             self._trip[car.id] = self._open_trip(car, sim, t, car.dest, free_flow)
             return
 
@@ -210,6 +251,47 @@ class MetricsCollector:
         for c in sim.cars:
             counts[c.edge_id] += 1
         return dict(counts)
+
+    def edge_count_series(self, edge_id: int) -> List[int]:
+        """Per-step car count on ``edge_id`` (0 when empty). Needs ``record_edges``."""
+        return [snap.get(edge_id, (0, 0.0))[0] for snap in self.edge_history]
+
+    def edge_speed_series(self, edge_id: int) -> List[float]:
+        """Per-step mean speed on ``edge_id`` [m/s] (0.0 when empty)."""
+        return [snap.get(edge_id, (0, 0.0))[1] for snap in self.edge_history]
+
+    def edge_density_series(self, edge_id: int, net) -> List[float]:
+        """Per-step density on ``edge_id`` [veh/m] = count / edge length."""
+        length = net.edges[edge_id].length
+        return [c / length for c in self.edge_count_series(edge_id)]
+
+    def node_mean_wait(self, node_id: int) -> float:
+        """Mean stopped time [s] per vehicle crossing ``node_id`` (0 if none)."""
+        n = self.node_crossings.get(node_id, 0)
+        return self.node_wait.get(node_id, 0.0) / n if n else 0.0
+
+    def busiest_nodes(self, k: int = 5) -> List[Tuple[int, float, int]]:
+        """The ``k`` most-congested nodes, worst first, as
+        ``(node_id, total_wait_s, crossings)`` by cumulative wait."""
+        items = [(nid, w, self.node_crossings.get(nid, 0))
+                 for nid, w in self.node_wait.items()]
+        items.sort(key=lambda x: x[1], reverse=True)
+        return items[:k]
+
+    def fundamental_samples(self, net) -> List[Tuple[float, float, float]]:
+        """All ``(density [veh/km], flow [veh/h], speed [km/h])`` samples across
+        every occupied edge and step — the points of the fundamental diagram.
+
+        Flow uses the hydrodynamic relation ``q = k * v`` (density times mean
+        speed). Needs ``record_edges=True``.
+        """
+        samples: List[Tuple[float, float, float]] = []
+        for snap in self.edge_history:
+            for eid, (count, speed) in snap.items():
+                k = count / net.edges[eid].length * 1000.0     # veh/km
+                v = speed * 3.6                                # km/h
+                samples.append((k, k * v, v))                  # q = k*v  [veh/h]
+        return samples
 
     @property
     def times(self) -> List[float]:
@@ -258,6 +340,10 @@ class MetricsCollector:
             "crashes": self.crashes,
             "max_decel": self.max_decel,
             "fuel_proxy": self.fuel_proxy,
+            "intersection_wait_s": sum(self.node_wait.values()),
+            "mean_wait_per_crossing_s": (
+                sum(self.node_wait.values()) / total_crossings
+                if total_crossings else 0.0),
         }
         if self.trips:
             delays = sorted(self.delays)

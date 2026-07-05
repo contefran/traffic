@@ -26,6 +26,7 @@ class Car:
     edge_id: int
     s: float        # position along edge, in [0, edge.length]
     v: float        # speed [m/s]
+    lane: int = 0   # lane index on the current edge, 0 = rightmost
 
     # The edge this car will move onto at the end of the current one. Committed
     # in advance (before the stop line) so the signal can gate the specific
@@ -37,6 +38,10 @@ class Car:
     # destination-aware router reads this to steer toward ``dest`` and assigns
     # a fresh one when the car arrives.
     dest: Optional[int] = None
+    # Where along the final approach edge the destination actually is, as a
+    # fraction in (0, 1]: 1.0 = the intersection itself, <1 = a point mid-block
+    # (an address on the street). Only used with park-and-dwell.
+    dest_frac: float = 1.0
 
     # Physical / behavioural parameters (per-car so they can be varied).
     max_speed: float = 50.0       # [m/s] hard cap on desired speed
@@ -46,6 +51,12 @@ class Car:
     max_brake: float = 9.0        # [m/s^2] physical decel limit (tyre-road grip)
     s0: float = 2.0               # minimum standstill gap [m]
     time_headway: float = 1.2     # desired time gap to leader [s]
+
+    # Trip lifecycle for park-and-dwell. ``active`` False means the car has
+    # arrived and is parked (off the road, not part of the flow); it re-enters
+    # when the simulation clock reaches ``wake_t``.
+    active: bool = True
+    wake_t: float = 0.0
 
     # History of (t, edge_id, s) samples, for debugging / metrics.
     trail: deque = field(default_factory=lambda: deque(maxlen=200))
