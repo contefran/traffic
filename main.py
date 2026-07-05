@@ -139,7 +139,13 @@ def main(argv=None) -> None:
         print(f"metrics: avg_speed={s['avg_speed']:.2f} m/s "
               f"({ms_to_kmh(s['avg_speed']):.1f} km/h), "
               f"avg_queue={s['avg_queue']:.1f}, max_queue={s['max_queue']}, "
-              f"throughput={s['throughput_per_s']:.2f}/s")
+              f"throughput={s['throughput_per_s']:.2f}/s, "
+              f"crashes={s['crashes']}")
+        if "mean_delay_s" in s:
+            print(f"         trips={s['trips_completed']}, "
+                  f"mean_delay={s['mean_delay_s']:.1f} s, "
+                  f"stops/trip={s['mean_stops_per_trip']:.2f}, "
+                  f"fuel={s['fuel_proxy']:.0f}")
     else:
         print("metrics:", s)
 
