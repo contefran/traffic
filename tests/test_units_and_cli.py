@@ -21,7 +21,7 @@ def test_kmh_ms_round_trip():
 
 def test_parser_defaults_match_the_documented_demo():
     args = main.build_parser().parse_args([])
-    assert (args.width, args.height) == (8, 8)
+    assert (args.width, args.height) == (20, 20)
     assert args.controller == "protected"
     assert args.priority is True
     assert args.router == "shortest"

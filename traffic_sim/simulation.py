@@ -148,23 +148,24 @@ class TrafficSim:
         """`(gap, lead_speed)` from a car at ``s`` to ``lead``, or ``None``."""
         return None if lead is None else (lead.s - s - length, lead.v)
 
-    def _plan_lane_changes(self, cars_on_lane: Dict[Tuple[int, int], List[Car]]) -> List[Tuple[Car, int]]:
-        """Decide lane changes (MOBIL-style), evaluated on the current state.
+    def _apply_lane_changes(self, cars_on_lane: Dict[Tuple[int, int], List[Car]]) -> None:
+        """Apply MOBIL-style lane changes, **in place, one car at a time**.
 
         A car moves to an adjacent lane when it gains acceleration there
         (``a_new - a_old`` beats :data:`LANE_CHANGE_MIN_GAIN`, plus a keep-right
         bonus) *and* it is safe — it fits ahead of that lane's leader and does not
         force that lane's follower to brake harder than
-        :data:`LANE_CHANGE_SAFE_BRAKE`. Returns a list of ``(car, new_lane)``.
+        :data:`LANE_CHANGE_SAFE_BRAKE`. Each move updates ``cars_on_lane``
+        immediately, so a later car sees it and two cars never merge into the same
+        gap on the same step (which would otherwise collide in dense traffic).
         """
-        changes: List[Tuple[Car, int]] = []
-        for (edge_id, _lane), lst in cars_on_lane.items():
+        # Snapshot the (edge, lane) keys and their cars up front; each car is
+        # considered once, but neighbour lookups read the live, updated buckets.
+        for (edge_id, lane) in [k for k in cars_on_lane if self.net.edges[k[0]].lanes > 1]:
             edge = self.net.edges[edge_id]
-            if edge.lanes <= 1:
-                continue
-            for car in lst:
+            for car in list(cars_on_lane.get((edge_id, lane), ())):
                 v_des = min(edge.speed_limit, car.max_speed)
-                cur_leader, _ = self._lane_neighbours(car, lst)
+                cur_leader, _ = self._lane_neighbours(car, cars_on_lane.get((edge_id, car.lane), ()))
                 a_old = self._idm_accel(car, v_des,
                                         self._gap_obstacle(car.s, car.length, cur_leader))
                 best_lane, best_gain = car.lane, LANE_CHANGE_MIN_GAIN
@@ -188,8 +189,11 @@ class TrafficSim:
                     if gain > best_gain:
                         best_gain, best_lane = gain, target
                 if best_lane != car.lane:
-                    changes.append((car, best_lane))
-        return changes
+                    cars_on_lane[(edge_id, car.lane)].remove(car)   # leave old lane
+                    car.lane = best_lane
+                    tl = cars_on_lane.setdefault((edge_id, best_lane), [])
+                    tl.append(car)
+                    tl.sort(key=lambda c: c.s, reverse=True)         # keep front-first
 
     def step(self, dt: float) -> None:
         """Advance the whole simulation by ``dt`` seconds.
@@ -239,18 +243,10 @@ class TrafficSim:
         for lst in cars_on_lane.values():
             lst.sort(key=lambda c: c.s, reverse=True)
 
-        # Lane-change pass (overtaking): decide on the current state, apply, then
-        # rebuild the lane buckets so the movement pass sees the new lanes.
+        # Lane-change pass (overtaking): applied car-by-car in place, so two cars
+        # never move into the same gap on the same step (which would collide).
         if self._has_multilane:
-            changes = self._plan_lane_changes(cars_on_lane)
-            if changes:
-                for car, new_lane in changes:
-                    car.lane = new_lane
-                cars_on_lane = {}
-                for car in self.cars:
-                    cars_on_lane.setdefault((car.edge_id, car.lane), []).append(car)
-                for lst in cars_on_lane.values():
-                    lst.sort(key=lambda c: c.s, reverse=True)
+            self._apply_lane_changes(cars_on_lane)
 
         # Right-of-way contest data at unsignalized nodes (empty if disabled).
         fronts = self._approach_fronts(cars_on_edge) if self.priority is not None else {}

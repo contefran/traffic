@@ -36,13 +36,30 @@ from traffic_sim import (
 
 
 def spawn_cars(net, n_cars: int, seed: int = 0):
-    """Place ``n_cars`` at random positions on random edges (deterministic)."""
+    """Place ``n_cars`` at random positions on random edges (deterministic).
+
+    Cars start stationary, so two placed within a car-length of each other on the
+    same edge and lane would be an instant crash on step 1 — a pure placement
+    artefact, not traffic. We reject any position closer than ``min_gap`` to an
+    already-placed car in the same (edge, lane), retrying a few times before
+    moving to a fresh edge, so the initial state is always collision-free.
+    """
     rng = random.Random(seed)
+    min_gap = Car.length + Car.s0 + 2.0        # rear + standstill gap + margin
+    occupied: dict = {}                         # (edge_id, lane) -> [s, ...]
     cars = []
     for i in range(n_cars):
-        edge = rng.choice(net.edges)
-        cars.append(Car(id=i, edge_id=edge.id, s=rng.uniform(0.0, edge.length),
-                        v=0.0, lane=rng.randrange(edge.lanes)))
+        for _ in range(20):                     # a few tries for a clear slot
+            edge = rng.choice(net.edges)
+            lane = rng.randrange(edge.lanes)
+            s = rng.uniform(0.0, edge.length)
+            placed = occupied.setdefault((edge.id, lane), [])
+            if all(abs(s - o) >= min_gap for o in placed):
+                placed.append(s)
+                cars.append(Car(id=i, edge_id=edge.id, s=s, v=0.0, lane=lane))
+                break
+        else:                                   # no clear slot found; place anyway
+            cars.append(Car(id=i, edge_id=edge.id, s=s, v=0.0, lane=lane))
     return cars
 
 
@@ -54,8 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     net = p.add_argument_group("network")
-    net.add_argument("--width", type=int, default=8, help="grid columns")
-    net.add_argument("--height", type=int, default=8, help="grid rows")
+    net.add_argument("--width", type=int, default=20, help="grid columns")
+    net.add_argument("--height", type=int, default=20, help="grid rows")
     net.add_argument("--block", type=float, default=150.0, help="block spacing [m]")
     net.add_argument("--seed", type=int, default=1, help="network RNG seed")
     net.add_argument("--jitter", type=float, default=0.22,
@@ -92,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
                         default=True, help="destinations are mid-block points, not junctions")
 
     traffic = p.add_argument_group("traffic")
-    traffic.add_argument("--cars", type=int, default=60, help="number of cars")
+    traffic.add_argument("--cars", type=int, default=1000, help="number of cars")
     traffic.add_argument("--car-seed", type=int, default=1, help="car placement seed")
     traffic.add_argument("--router", choices=("shortest", "random"), default="shortest",
                          help="routing policy")
