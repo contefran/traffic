@@ -21,6 +21,7 @@ from .signals import (
 from .priority import PriorityModel
 from .left_turns import PermissiveLeftModel
 from .zones import LandUse, assign_zones, nodes_by_zone, apply_zone_speeds
+from .grade import add_grade_separated
 from .demand import DemandModel, Period
 from .parking import ParkingModel
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
@@ -49,6 +50,7 @@ __all__ = [
     "assign_zones",
     "nodes_by_zone",
     "apply_zone_speeds",
+    "add_grade_separated",
     "DemandModel",
     "Period",
     "ParkingModel",
