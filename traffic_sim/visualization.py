@@ -161,6 +161,38 @@ class Visuals:
         plt.close(fig)
         return path
 
+    def render_zones(self, net, zones, path: str = "zones.png", title: str = None):
+        """Render the land-use map: nodes coloured by zone, with a legend.
+
+        ``zones`` is a ``{node_id: LandUse}`` map (see :mod:`traffic_sim.zones`).
+        Returns the PNG path.
+        """
+        from .zones import LandUse
+        from matplotlib.lines import Line2D
+
+        colors = {LandUse.RESIDENTIAL: "#2ca02c", LandUse.OFFICE: "#1f77b4",
+                  LandUse.RETAIL: "#ff7f0e", LandUse.OTHER: "#888888"}
+        fig, ax = plt.subplots(figsize=(7, 6))
+        self._draw_edges(ax, net)
+        for use, color in colors.items():
+            pts = [net.nodes[nid] for nid, u in zones.items() if u is use]
+            if pts:
+                ax.scatter([n.x for n in pts], [n.y for n in pts], s=45,
+                           color=color, edgecolors="white", linewidths=0.5, zorder=3)
+        handles = [Line2D([], [], marker="o", linestyle="None", markersize=8,
+                          markerfacecolor=colors[u], markeredgecolor="white",
+                          label=u.value) for u in LandUse if any(v is u for v in zones.values())]
+        ax.legend(handles=handles, title="land use", loc="upper left",
+                  bbox_to_anchor=(1.02, 1.0), fontsize=9, borderaxespad=0.0)
+        min_x, min_y, max_x, max_y = net.bounds()
+        ax.set_aspect("equal")
+        ax.set_xlim(min_x - 12, max_x + 12)
+        ax.set_ylim(min_y - 12, max_y + 12)
+        ax.set_title(title or "Land-use zones")
+        fig.savefig(path, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
     def render_metrics(self, metrics, signals=None, net=None,
                        path: str = "metrics.png", title: str = None):
         """Plot mean speed and queue length over time, shaded by signal phase.

@@ -49,6 +49,7 @@ class TrafficSim:
         signals: Optional[SignalSystem] = None,
         priority: Optional[PriorityModel] = None,
         left_turn=None,
+        parking=None,
         metrics=None,
     ) -> None:
         """Wire up the simulation.
@@ -68,6 +69,8 @@ class TrafficSim:
         self.priority = priority
         # Permissive-left gap acceptance at signalized nodes; None => free lefts.
         self.left_turn = left_turn
+        # Park-and-dwell lifecycle; None => cars sail through destinations.
+        self.parking = parking
         self.metrics = metrics  # optional MetricsCollector; observes each step
         self.t = 0.0
         # Genuine collisions: a car that could not stop in time even at its
@@ -207,11 +210,28 @@ class TrafficSim:
         moving car does not disturb the ordering mid-step. Advances ``self.t``
         and, if a metrics collector is attached, records the new state.
         """
-        # Group cars by edge (all lanes) for intersection logic, and by
+        # Keep the router's clock in sync so a time-of-day demand model can pick
+        # destinations for the current moment (a no-op for time-agnostic routers).
+        self.router.now = self.t
+
+        # Wake pass: parked cars whose dwell is over re-enter the flow and pick a
+        # fresh (time-appropriate) destination from where they are parked.
+        if self.parking is not None:
+            for car in self.cars:
+                if not car.active and self.t >= car.wake_t:
+                    car.active = True
+                    car.next_edge = None
+                    if hasattr(self.router, "assign_destination"):
+                        self.router.assign_destination(
+                            car, avoid=self.net.edges[car.edge_id].v)
+
+        # Group *active* cars by edge (all lanes) for intersection logic, and by
         # (edge, lane) for car-following. Each list is sorted front (high s) -> back.
         cars_on_edge: Dict[int, List[Car]] = {}
         cars_on_lane: Dict[Tuple[int, int], List[Car]] = {}
         for car in self.cars:
+            if not car.active:
+                continue  # parked cars are off the road
             cars_on_edge.setdefault(car.edge_id, []).append(car)
             cars_on_lane.setdefault((car.edge_id, car.lane), []).append(car)
         for lst in cars_on_edge.values():
@@ -248,7 +268,12 @@ class TrafficSim:
 
                 # Commit the next edge in advance so the signal can gate this
                 # car's specific movement (e.g. a protected left vs a through).
-                if car.next_edge is None:
+                # With parking on, a car that has reached its destination edge
+                # does not route onward — it keeps ``next_edge = None`` so it
+                # stops at the node and is parked in the pass below.
+                arriving = (self.parking is not None and car.dest is not None
+                            and edge.v == car.dest)
+                if car.next_edge is None and not arriving:
                     car.next_edge = self.router.next_edge(edge_id, car)
 
                 red = False
@@ -286,6 +311,11 @@ class TrafficSim:
                         and self._unsignalized(edge.v)
                         and self.priority.must_yield(edge_id, car.next_edge,
                                                      fronts.get(edge.v, []))):
+                    red = True
+
+                # Arriving at its destination: brake for the node like a stop
+                # line, so the car halts smoothly there before being parked.
+                if arriving:
                     red = True
 
                 # Constraints ahead, each (gap, speed): the leader and/or, on
@@ -352,6 +382,18 @@ class TrafficSim:
             car.s = new_s
             car.lane = new_lane
             car.trail.append((self.t, car.edge_id, car.s))
+
+        # Park pass: a car halted at its destination node goes inactive for a
+        # dwell (the wake pass re-enters it later with a fresh destination).
+        if self.parking is not None:
+            for car in self.cars:
+                if not car.active or car.dest is None or car.next_edge is not None:
+                    continue
+                edge = self.net.edges[car.edge_id]
+                if (edge.v == car.dest and car.v <= 0.5
+                        and edge.length - car.s <= 3.0):
+                    car.active = False
+                    car.wake_t = self.t + self.parking.dwell_time(car.dest)
 
         self.t += dt
 

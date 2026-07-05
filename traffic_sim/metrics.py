@@ -115,9 +115,12 @@ class MetricsCollector:
         :class:`TripMetrics` whenever a car reaches its destination. Call once
         per step, after the step has advanced.
         """
-        cars = sim.cars
         t = sim.t
         dt = (t - self._last_t) if self._last_t is not None else 0.0
+        # Road aggregates cover cars actually in the flow; parked (inactive) cars
+        # are off the road and excluded. Trip tracking below still sees them all,
+        # so a car parking counts as an arrival.
+        cars = [c for c in sim.cars if getattr(c, "active", True)]
 
         speeds = [c.v for c in cars]
         mean_speed = sum(speeds) / len(speeds) if speeds else 0.0
@@ -153,7 +156,7 @@ class MetricsCollector:
         # A destination-aware router exposes free_flow_time; without it (a
         # wandering router) cars have no destination and no trips are produced.
         free_flow = getattr(sim.router, "free_flow_time", None)
-        for c in cars:
+        for c in sim.cars:                       # all cars, so parking = arrival
             self._update_trip(c, sim, t, dt, free_flow)
 
         if self.record_edges:
@@ -185,22 +188,42 @@ class MetricsCollector:
                 "stops": 0, "stopped_time": 0.0,
                 "was_stopped": car.v <= self.stopped_speed, "armed": False}
 
+    def _finalize_trip(self, car, state, t: float) -> None:
+        """Append a completed :class:`TripMetrics` from ``state`` (skips a trip
+        whose free-flow baseline is unknown)."""
+        if state["free_flow"] is None:
+            return
+        travel = t - state["start_t"]
+        self.trips.append(TripMetrics(
+            car_id=car.id, start_t=state["start_t"], end_t=t,
+            travel_time=travel, free_flow_time=state["free_flow"],
+            delay=travel - state["free_flow"],
+            stops=state["stops"], stopped_time=state["stopped_time"]))
+
     def _update_trip(self, car, sim, t: float, dt: float, free_flow) -> None:
         """Advance one car's trip tracking for this step.
 
-        A trip completes on **arrival** — the car is now on an edge *leaving* its
-        target node (``edge.u == target``), which is the true geometric arrival
-        (the router reassigns the destination one edge earlier, so watching
-        ``car.dest`` would end the trip too soon). The ``armed`` guard requires
-        the car to have left the target's vicinity first, so a freshly opened
-        trip cannot complete instantly. On arrival, finalise the leg into
-        :attr:`trips` and open the next one toward the already-reassigned
-        ``car.dest``. Between boundaries, accumulate stops (moving -> halted
-        transitions) and time spent stopped.
+        A trip completes on **arrival**. Under park-and-dwell that is the moment
+        the car goes inactive (parks at its destination). Otherwise (sail-through)
+        it is when the car reaches an edge *leaving* its target node (``edge.u ==
+        target``) — the router reassigns the destination one edge early, so
+        watching ``car.dest`` would end the trip too soon, and the ``armed`` guard
+        stops a freshly opened trip completing instantly. On arrival, finalise the
+        leg and open the next one; while parked, no trip is tracked (so dwell time
+        never counts as travel time). Between boundaries, accumulate stops and
+        stopped time.
         """
         state = self._trip.get(car.id)
+
+        if not getattr(car, "active", True):
+            # Parked: the trip in progress just completed on arrival.
+            if state is not None:
+                self._finalize_trip(car, state, t)
+                self._trip[car.id] = None
+            return
+
         if state is None:
-            if car.dest is not None:  # begin tracking once there is a destination
+            if car.dest is not None:  # begin (or restart after waking) a trip
                 self._trip[car.id] = self._open_trip(car, sim, t, car.dest, free_flow)
             return
 
@@ -209,13 +232,7 @@ class MetricsCollector:
             if cur_u != state["target"]:
                 state["armed"] = True
         elif cur_u == state["target"] and car.dest is not None:
-            if state["free_flow"] is not None:
-                travel = t - state["start_t"]
-                self.trips.append(TripMetrics(
-                    car_id=car.id, start_t=state["start_t"], end_t=t,
-                    travel_time=travel, free_flow_time=state["free_flow"],
-                    delay=travel - state["free_flow"],
-                    stops=state["stops"], stopped_time=state["stopped_time"]))
+            self._finalize_trip(car, state, t)
             self._trip[car.id] = self._open_trip(car, sim, t, car.dest, free_flow)
             return
 

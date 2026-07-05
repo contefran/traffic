@@ -48,5 +48,11 @@ class Car:
     s0: float = 2.0               # minimum standstill gap [m]
     time_headway: float = 1.2     # desired time gap to leader [s]
 
+    # Trip lifecycle for park-and-dwell. ``active`` False means the car has
+    # arrived and is parked (off the road, not part of the flow); it re-enters
+    # when the simulation clock reaches ``wake_t``.
+    active: bool = True
+    wake_t: float = 0.0
+
     # History of (t, edge_id, s) samples, for debugging / metrics.
     trail: deque = field(default_factory=lambda: deque(maxlen=200))

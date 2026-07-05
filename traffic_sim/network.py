@@ -160,6 +160,7 @@ def build_city_grid(
     ring: bool = False,
     ring_speed: float = 30.0,
     ring_lanes: int = 3,
+    ring_access_spacing: float = 1000.0,
 ) -> RoadNetwork:
     """A heterogeneous grid: same ``(i, j)`` topology as :func:`build_grid_network`
     (so the H/V signal model still applies) but with cheap realism added.
@@ -180,8 +181,13 @@ def build_city_grid(
       perimeter (border rows/columns) becomes a fast ring road: ``ring_speed``
       limit and ``ring_lanes`` lanes (default 3). Ring beats arterial beats local.
       Everything else is a single-lane local street at ``DEFAULT_SPEED_LIMIT``.
-      (Lane counts populate ``Edge.lanes``; the dynamics use them once the
-      multi-lane model is enabled.)
+      The ring is a **limited-access** road: on/off ramps (radials linking it to
+      the interior) appear only about every ``ring_access_spacing`` metres, at
+      least one per side. Elsewhere the ring runs past with no junction, so those
+      border nodes see one orientation and aren't signalized — the ring flows
+      freely, which keeps the fast ring physically coherent (a grade-separated
+      ring is a later refinement). The ring loop is always two-way.
+      (Lane counts populate ``Edge.lanes``.)
 
     ``block`` should be *physically coherent* with the speeds: a car must be able
     to stop within a block, i.e. ``block`` comfortably larger than the braking
@@ -223,14 +229,16 @@ def build_city_grid(
         nodes[u].out_edges.append(eid)
         nodes[v].in_edges.append(eid)
 
-    def connect(u: int, v: int, speed: float, lanes: int, protected: bool) -> None:
+    def connect(u: int, v: int, speed: float, lanes: int, protected: bool,
+                two_way: bool = False) -> None:
         """Connect neighbours ``u`` and ``v``, honouring ``drop_prob`` (skip the
         connection) and ``one_way_prob`` (a single directed edge instead of a
         two-way pair). ``protected`` connections (ring, arterial) are never
-        dropped, keeping the through-routes intact."""
+        dropped; ``two_way`` ones (the ring loop) are never made one-way, so the
+        loop stays strongly connected on its own."""
         if not protected and drop_prob and rng.random() < drop_prob:
             return
-        if one_way_prob and rng.random() < one_way_prob:
+        if not two_way and one_way_prob and rng.random() < one_way_prob:
             # One-way: keep a single direction (chosen at random).
             a, b = (u, v) if rng.random() < 0.5 else (v, u)
             add_edge(a, b, speed, lanes)
@@ -251,15 +259,39 @@ def build_city_grid(
             return arterial_speed, arterial_lanes, True
         return DEFAULT_SPEED_LIMIT, 1, False
 
+    # Limited-access ring: on/off ramps (radials linking the ring to the
+    # interior) only at a few interchange rows/columns — about one per
+    # ``ring_access_spacing`` metres, at least one per side. Elsewhere the ring
+    # runs past with no junction (those border nodes see only one orientation, so
+    # they are unsignalized and the ring flows freely — which also keeps the fast
+    # ring physically coherent). A grade-separated ring is a later refinement.
+    spacing = max(1.0, ring_access_spacing / block)
+    access_rows = _ring_interchanges(height, spacing) if ring else set()
+    access_cols = _ring_interchanges(width, spacing) if ring else set()
+
     for j in range(height):
         for i in range(width):
             u = node_id[(i, j)]
             if i + 1 < width:  # horizontal connection lies on row j
-                speed, lanes, prot = classify(j == 0 or j == height - 1, j)
-                connect(u, node_id[(i + 1, j)], speed, lanes, prot)
+                on_border = (j == 0 or j == height - 1)
+                radial = ring and not on_border and (i == 0 or i + 1 == width - 1)
+                ramp = radial and j in access_rows          # kept on/off ramp
+                if radial and not ramp:
+                    pass  # no ring on/off ramp here
+                else:
+                    speed, lanes, prot = classify(on_border, j)
+                    connect(u, node_id[(i + 1, j)], speed, lanes, prot or ramp,
+                            two_way=on_border or ramp)
             if j + 1 < height:  # vertical connection lies on column i
-                speed, lanes, prot = classify(i == 0 or i == width - 1, i)
-                connect(u, node_id[(i, j + 1)], speed, lanes, prot)
+                on_border = (i == 0 or i == width - 1)
+                radial = ring and not on_border and (j == 0 or j + 1 == height - 1)
+                ramp = radial and i in access_cols
+                if radial and not ramp:
+                    pass  # no ring on/off ramp here
+                else:
+                    speed, lanes, prot = classify(on_border, i)
+                    connect(u, node_id[(i, j + 1)], speed, lanes, prot or ramp,
+                            two_way=on_border or ramp)
 
     def grid_neighbours(node: Node):
         """Yield the node ids of ``node``'s existing grid neighbours (E/W/N/S)."""
@@ -280,6 +312,22 @@ def build_city_grid(
     _make_strongly_connected(nodes, edges, grid_neighbours, add_edge)
 
     return RoadNetwork(nodes=nodes, edges=edges, node_id=node_id)
+
+
+def _ring_interchanges(dim: int, spacing: float) -> set:
+    """Interior indices along a side of ``dim`` nodes that are ring interchanges.
+
+    About one every ``spacing`` blocks, at least one, evenly spaced among the
+    interior positions (corners are always on the ring, never on/off ramps).
+    """
+    interior = list(range(1, dim - 1))
+    if not interior:
+        return set()
+    count = min(len(interior), max(1, round((dim - 1) / spacing)))
+    if count == 1:
+        return {interior[len(interior) // 2]}
+    step = (len(interior) - 1) / (count - 1)
+    return {interior[round(k * step)] for k in range(count)}
 
 
 def _strongly_connected_components(nodes: List[Node], edges: List[Edge]) -> List[int]:

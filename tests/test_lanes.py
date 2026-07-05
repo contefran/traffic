@@ -45,6 +45,34 @@ def test_ring_edges_are_never_dropped():
         assert _edge(net, a, b) is not None or _edge(net, b, a) is not None
 
 
+def test_ring_is_limited_access_but_still_connected():
+    # On/off ramps are few (at least one per side) and the graph stays strongly
+    # connected via the ring loop.
+    from traffic_sim.network import _strongly_connected_components
+    W = Hh = 8
+    net = build_city_grid(W, Hh, 150.0, seed=1, jitter=0.15, one_way_prob=0.15,
+                          drop_prob=0.12, arterial_every=3, ring=True,
+                          ring_access_spacing=1000.0)
+    is_border = lambda n: n.i in (0, W - 1) or n.j in (0, Hh - 1)
+    ramps = sum(1 for e in net.edges
+                if is_border(net.nodes[e.u]) and not is_border(net.nodes[e.v]))
+    # Far fewer than one ramp per border node (there are dozens of border nodes).
+    assert 4 <= ramps <= 12
+    comp = _strongly_connected_components(net.nodes, net.edges)
+    assert max(comp) == 0, "every destination must stay reachable"
+
+
+def test_tighter_spacing_gives_more_ramps():
+    W = Hh = 10
+    def ramps(spacing):
+        net = build_city_grid(W, Hh, 150.0, seed=1, ring=True,
+                              ring_access_spacing=spacing)
+        b = lambda n: n.i in (0, W - 1) or n.j in (0, Hh - 1)
+        return sum(1 for e in net.edges
+                   if b(net.nodes[e.u]) and not b(net.nodes[e.v]))
+    assert ramps(400.0) > ramps(1500.0)
+
+
 def test_lanes_decouple_car_following():
     # A car in lane 1 is not blocked by a stopped car in lane 0 on the same edge.
     net = build_grid_network(3, 3, block=150.0)
