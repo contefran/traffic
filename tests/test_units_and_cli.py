@@ -25,7 +25,7 @@ def test_parser_defaults_match_the_documented_demo():
     assert args.controller == "protected"
     assert args.priority is True
     assert args.router == "shortest"
-    assert args.arterial_speed == 90.0  # km/h
+    assert args.arterial_speed == 70.0  # km/h
 
 
 def test_no_priority_flag_disables_priority():

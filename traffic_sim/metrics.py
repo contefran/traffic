@@ -17,13 +17,6 @@ from typing import Dict, List, Optional
 # A car slower than this is treated as queued/stopped [m/s].
 STOPPED_SPEED = 0.5
 
-# An implied deceleration above this counts as a "crash" — braking harder than
-# tyre-road friction physically allows (~0.9 g). The hard backstop can impose an
-# instantaneous stop, which shows up here; the count rises with the step size
-# (larger dt => coarser integration => more/harder backstop events), so it also
-# doubles as a numerical-stability check on dt.
-CRASH_DECEL = 9.0  # [m/s^2]
-
 # Illustrative fuel/emissions proxy coefficients (for *relative* comparison only,
 # not calibrated units): a base idle burn, a cruising term (~drag/rolling, grows
 # with speed), and a traction term charged only while accelerating (~power, v*a).
@@ -83,15 +76,17 @@ class MetricsCollector:
     """
 
     stopped_speed: float = STOPPED_SPEED
-    crash_decel: float = CRASH_DECEL
     history: List[StepMetrics] = field(default_factory=list)
     # Per-edge cumulative crossings (cars that left that edge into a new one).
     edge_crossings: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
     # Completed destination-legs (empty under a wandering router).
     trips: List[TripMetrics] = field(default_factory=list)
-    # Safety / emissions accumulators (see the module constants).
-    crashes: int = 0            # implied decel above crash_decel [count]
-    max_decel: float = 0.0      # peak implied deceleration observed [m/s^2]
+    # Safety / emissions. ``crashes`` mirrors the simulation's own count of
+    # genuine collisions (a car that could not stop even at its physical braking
+    # limit); ``max_decel`` is the peak deceleration observed (bounded by the
+    # cars' ``max_brake`` except at a crash impulse) — a useful sanity check.
+    crashes: int = 0            # genuine collisions (from TrafficSim.crashes)
+    max_decel: float = 0.0      # peak observed deceleration [m/s^2]
     fuel_proxy: float = 0.0     # cumulative fuel/emissions surrogate [proxy units]
     _last_edge: Dict[int, int] = field(default_factory=dict)
     _last_v: Dict[int, float] = field(default_factory=dict)
@@ -105,9 +100,9 @@ class MetricsCollector:
         Computes mean speed and queue length over all cars, and counts
         intersection crossings by detecting which cars changed edge since the
         previous call (also accumulating per-edge crossings in
-        ``edge_crossings``). From per-car speed deltas it also tallies harsh
-        braking / crashes (implied deceleration above ``crash_decel``) and a
-        fuel/emissions proxy. Also advances per-car trip tracking, appending a
+        ``edge_crossings``). From per-car speed deltas it tracks peak
+        deceleration and a fuel/emissions proxy, and mirrors the simulation's
+        genuine-collision count. Also advances per-car trip tracking, appending a
         :class:`TripMetrics` whenever a car reaches its destination. Call once
         per step, after the step has advanced.
         """
@@ -127,18 +122,19 @@ class MetricsCollector:
                 self.edge_crossings[prev] += 1
             self._last_edge[c.id] = c.edge_id
 
-            # Safety + fuel from this car's acceleration since the last step.
+            # Peak deceleration (a sanity check on the physical brake cap) and a
+            # fuel/emissions proxy, from this car's acceleration since last step.
             v_prev = self._last_v.get(c.id)
             if v_prev is not None and dt > 0:
                 a = (c.v - v_prev) / dt          # signed [m/s^2]
-                decel = -a                        # >0 while braking
-                if decel > self.max_decel:
-                    self.max_decel = decel
-                if decel > self.crash_decel:
-                    self.crashes += 1
+                if -a > self.max_decel:
+                    self.max_decel = -a
                 self.fuel_proxy += (FUEL_IDLE + FUEL_CRUISE * c.v
                                     + FUEL_ACCEL * c.v * max(0.0, a)) * dt
             self._last_v[c.id] = c.v
+
+        # The simulation counts genuine collisions (couldn't stop at max braking).
+        self.crashes = getattr(sim, "crashes", self.crashes)
 
         # A destination-aware router exposes free_flow_time; without it (a
         # wandering router) cars have no destination and no trips are produced.

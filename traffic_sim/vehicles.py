@@ -42,7 +42,8 @@ class Car:
     max_speed: float = 50.0       # [m/s] hard cap on desired speed
     length: float = 4.5           # [m]
     accel: float = 2.0            # [m/s^2]
-    braking: float = 4.0          # [m/s^2]
+    braking: float = 4.0          # [m/s^2] comfortable decel (IDM gap planning)
+    max_brake: float = 9.0        # [m/s^2] physical decel limit (tyre-road grip)
     s0: float = 2.0               # minimum standstill gap [m]
     time_headway: float = 1.2     # desired time gap to leader [s]
 

@@ -12,6 +12,7 @@ from .network import DEFAULT_SPEED_LIMIT
 
 
 GREEN = "#2ca02c"
+YELLOW = "#e8a800"
 RED = "#d62728"
 ARTERIAL = "#1f77b4"
 
@@ -77,14 +78,18 @@ class Visuals:
         return positions, specs
 
     def _signal_colors(self, signals, t, specs):
-        """Green/red colour for each indicator spec at time ``t``.
+        """Green / amber / red colour for each indicator spec at time ``t``.
 
         ``specs`` is the ``(node_id, orientation, turn)`` list from
-        :meth:`_signal_specs`; each entry is green iff ``signals`` currently
-        allows that movement. Recomputed every animation frame.
+        :meth:`_signal_specs`; each entry is coloured by ``signals.state`` for
+        that movement (amber during a phase's yellow clearance). Recomputed every
+        animation frame.
         """
-        return [GREEN if signals.allows(n, o, turn, t) else RED
-                for (n, o, turn) in specs]
+        from .signals import SignalState
+
+        colors = {SignalState.GREEN: GREEN, SignalState.YELLOW: YELLOW,
+                  SignalState.RED: RED}
+        return [colors[signals.state(n, o, turn, t)] for (n, o, turn) in specs]
 
     def _draw_signals(self, ax, net, signals, t: float) -> None:
         """Scatter the per-node signal indicators onto ``ax`` for a static frame."""
@@ -118,6 +123,7 @@ class Visuals:
             square("0.55", "right, lower  =  E–W through"),
             square("0.55", "right, upper  =  E–W left"),
             square(GREEN, "green  =  may go"),
+            square(YELLOW, "amber  =  clearing (stop if you can)"),
             square(RED, "red  =  stop"),
         ]
         ax.legend(handles=handles,

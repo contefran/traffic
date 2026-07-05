@@ -49,6 +49,20 @@ class TurnType(Enum):
     UTURN = "U"
 
 
+class SignalState(Enum):
+    """Three-colour state of a movement's signal.
+
+    ``YELLOW`` is the clearance interval after green: a car stops if it still
+    can (comfortably), otherwise it is committed and proceeds through — which is
+    how :meth:`TrafficSim.step` interprets it. Controllers built without a yellow
+    interval only ever return ``GREEN`` / ``RED`` (backward compatible).
+    """
+
+    GREEN = "G"
+    YELLOW = "Y"
+    RED = "R"
+
+
 def edge_orientation(net: RoadNetwork, edge_id: int) -> Orientation:
     """Classify an edge as horizontal or vertical from its endpoints' grid rows.
 
@@ -107,6 +121,10 @@ class SignalPlan:
       are the phase **split**.
     * ``offset`` — shifts this node's schedule relative to global time ``t``, so
       neighbouring intersections need not switch together (enabling green waves).
+    * ``yellow`` — a clearance interval appended to *each* phase after its green,
+      during which that phase's movements are :attr:`SignalState.YELLOW` (stop if
+      you can, else commit). ``0`` (the default) reproduces the old two-colour
+      behaviour. It lengthens the cycle by ``yellow`` per phase.
 
     A controller keeps one plan per node and a default; two nodes with different
     offsets run on independent clocks. These are exactly the parameters an
@@ -115,26 +133,40 @@ class SignalPlan:
 
     green_times: Tuple[float, ...]
     offset: float = 0.0
+    yellow: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate that every phase has a positive green duration."""
+        """Validate the phase durations."""
         if not self.green_times or any(g <= 0 for g in self.green_times):
             raise ValueError("green_times must be non-empty and positive")
+        if self.yellow < 0:
+            raise ValueError("yellow must be non-negative")
 
     @property
     def cycle(self) -> float:
-        """Total cycle length [s] — the sum of all phase green times."""
-        return sum(self.green_times)
+        """Total cycle length [s]: the green times plus a yellow after each."""
+        return sum(self.green_times) + len(self.green_times) * self.yellow
 
-    def active_phase(self, t: float) -> int:
-        """Index of the phase active at time ``t`` for this plan."""
+    def phase_state(self, t: float) -> Tuple[int, "SignalState"]:
+        """The ``(phase index, GREEN or YELLOW)`` active at time ``t``.
+
+        Each phase occupies ``green_times[k]`` of green followed by ``yellow`` of
+        yellow; a movement's own phase is thus green then yellow, and red during
+        every other phase (that comparison lives in the controller).
+        """
         tau = (t - self.offset) % self.cycle
         acc = 0.0
         for k, g in enumerate(self.green_times):
-            acc += g
-            if tau < acc:
-                return k
-        return len(self.green_times) - 1  # only via float rounding at the seam
+            if tau < acc + g:
+                return k, SignalState.GREEN
+            if tau < acc + g + self.yellow:
+                return k, SignalState.YELLOW
+            acc += g + self.yellow
+        return len(self.green_times) - 1, SignalState.YELLOW  # float seam
+
+    def active_phase(self, t: float) -> int:
+        """Index of the phase active at time ``t`` (green or its trailing yellow)."""
+        return self.phase_state(t)[0]
 
 
 class PhasedController:
@@ -147,22 +179,23 @@ class PhasedController:
 
     NUM_PHASES: int = 0
 
-    def __init__(self, green_time: float, *,
+    def __init__(self, green_time: float, *, yellow: float = 0.0,
                  plans: Optional[Dict[int, SignalPlan]] = None,
                  default_plan: Optional[SignalPlan] = None) -> None:
         """Set up the shared default plan and any per-node overrides.
 
         ``green_time`` builds the default :class:`SignalPlan` (all
-        :attr:`NUM_PHASES` phases equal, zero offset) used by nodes without their
-        own plan. ``default_plan`` replaces that fallback outright; ``plans`` is
-        an optional initial ``{node_id: SignalPlan}`` mapping (more can be added
-        later with :meth:`set_plan`).
+        :attr:`NUM_PHASES` phases equal, zero offset); ``yellow`` is its clearance
+        interval per phase (``0`` = two-colour). ``default_plan`` replaces that
+        fallback outright; ``plans`` is an optional initial ``{node_id:
+        SignalPlan}`` mapping (more can be added later with :meth:`set_plan`).
         """
-        self.default_plan = default_plan or SignalPlan((green_time,) * self.NUM_PHASES)
+        self.default_plan = default_plan or SignalPlan(
+            (green_time,) * self.NUM_PHASES, yellow=yellow)
         self.plans: Dict[int, SignalPlan] = dict(plans or {})
 
     def set_plan(self, node_id: int, plan: SignalPlan) -> None:
-        """Give one intersection its own timing (offset / split / cycle)."""
+        """Give one intersection its own timing (offset / split / cycle / yellow)."""
         self.plans[node_id] = plan
 
     def plan_for(self, node_id: int) -> SignalPlan:
@@ -172,6 +205,28 @@ class PhasedController:
     def phase(self, node_id: int, t: float) -> int:
         """Index of the phase active at ``node_id`` at time ``t``."""
         return self.plan_for(node_id).active_phase(t)
+
+    def _movement_phase(self, orientation: Orientation, turn: TurnType) -> int:
+        """The phase index that serves this movement. Subclasses implement it."""
+        raise NotImplementedError
+
+    def state(self, node_id: int, orientation: Orientation,
+              turn: TurnType, t: float) -> SignalState:
+        """Three-colour signal for a movement: its phase's green/yellow, else red.
+
+        The movement is :attr:`SignalState.GREEN` or ``YELLOW`` exactly while its
+        own phase (:meth:`_movement_phase`) is the active one, and ``RED``
+        otherwise. With no yellow interval this only ever returns green or red.
+        """
+        active, sub = self.plan_for(node_id).phase_state(t)
+        if self._movement_phase(orientation, turn) == active:
+            return sub
+        return SignalState.RED
+
+    def allows(self, node_id: int, orientation: Orientation,
+               turn: TurnType, t: float) -> bool:
+        """Whether the movement has a full green now (``state`` is ``GREEN``)."""
+        return self.state(node_id, orientation, turn, t) is SignalState.GREEN
 
 
 class FixedTimeController(PhasedController):
@@ -186,19 +241,20 @@ class FixedTimeController(PhasedController):
 
     def __init__(self, green_time: float = 10.0,
                  start: Orientation = Orientation.HORIZONTAL, *,
+                 yellow: float = 0.0,
                  plans: Optional[Dict[int, SignalPlan]] = None,
                  default_plan: Optional[SignalPlan] = None) -> None:
         """Build a 2-phase fixed-time controller.
 
-        ``green_time`` is the default green duration of each of the two phases,
-        used to build the default :class:`SignalPlan` for any node without an
-        explicit plan. ``start`` is the orientation that is green in phase 0 (at
-        ``t = offset``). ``plans`` optionally supplies per-node
-        :class:`SignalPlan` objects up front; ``default_plan`` overrides the plan
-        used by nodes that have none. See :class:`PhasedController` for how plans
-        are resolved per node.
+        ``green_time`` is the default green duration of each of the two phases and
+        ``yellow`` their clearance interval. ``start`` is the orientation that is
+        green in phase 0 (at ``t = offset``). ``plans`` optionally supplies
+        per-node :class:`SignalPlan` objects up front; ``default_plan`` overrides
+        the plan used by nodes that have none. See :class:`PhasedController` for
+        how plans are resolved per node.
         """
-        super().__init__(green_time, plans=plans, default_plan=default_plan)
+        super().__init__(green_time, yellow=yellow, plans=plans,
+                         default_plan=default_plan)
         self.start = start
 
     def green_orientation(self, node_id: int, t: float) -> Orientation:
@@ -207,24 +263,21 @@ class FixedTimeController(PhasedController):
         Phase 0 gives green to :attr:`start`; phase 1 gives it to the other
         orientation. Which phase is active depends on the node's own plan
         (offset and split), so two nodes can show different green orientations at
-        the same instant.
+        the same instant. (During a phase's yellow this still reports that
+        phase's orientation.)
         """
         other = (Orientation.VERTICAL if self.start is Orientation.HORIZONTAL
                  else Orientation.HORIZONTAL)
         return other if self.phase(node_id, t) == 1 else self.start
 
-    def allows(self, node_id: int, orientation: Orientation,
-               turn: TurnType, t: float) -> bool:
-        """Whether a movement may proceed now (permissive turns).
+    def _movement_phase(self, orientation: Orientation, turn: TurnType) -> int:
+        """Phase 0 serves the ``start`` orientation, phase 1 the other.
 
-        A movement is allowed whenever its approach ``orientation`` matches the
-        node's currently-green orientation, regardless of ``turn`` — so a left
-        turn shares its phase with oncoming through traffic and may conflict with
-        it. Use :class:`ProtectedPhaseController` if that conflict matters.
-        Returns ``True`` if the movement is permitted at ``node_id`` at time
-        ``t``.
+        Turns are *permissive* — any turn goes with its approach orientation, so
+        a left shares its phase with oncoming through traffic and may conflict.
+        Use :class:`ProtectedPhaseController` if that conflict matters.
         """
-        return orientation is self.green_orientation(node_id, t)
+        return 0 if orientation is self.start else 1
 
 
 class ProtectedPhaseController(PhasedController):
@@ -244,18 +297,19 @@ class ProtectedPhaseController(PhasedController):
 
     _LABELS = ("H→", "H↰", "V→", "V↰")
 
-    def __init__(self, green_time: float = 5.0, *,
+    def __init__(self, green_time: float = 5.0, *, yellow: float = 0.0,
                  plans: Optional[Dict[int, SignalPlan]] = None,
                  default_plan: Optional[SignalPlan] = None) -> None:
         """Build a 4-phase protected-left controller.
 
         ``green_time`` is the default green duration of each of the four phases
-        (H-through, H-left, V-through, V-left) and forms the default
-        :class:`SignalPlan`. ``plans`` optionally supplies per-node plans up
-        front and ``default_plan`` overrides the fallback plan; see
-        :class:`PhasedController` for per-node resolution.
+        (H-through, H-left, V-through, V-left) and ``yellow`` their clearance
+        interval; together they form the default :class:`SignalPlan`. ``plans``
+        optionally supplies per-node plans up front and ``default_plan`` overrides
+        the fallback plan; see :class:`PhasedController` for per-node resolution.
         """
-        super().__init__(green_time, plans=plans, default_plan=default_plan)
+        super().__init__(green_time, yellow=yellow, plans=plans,
+                         default_plan=default_plan)
 
     def phase_label(self, node_id: int, t: float) -> str:
         """A short human-readable label for the active phase (e.g. ``"H→"``).
@@ -265,22 +319,18 @@ class ProtectedPhaseController(PhasedController):
         """
         return self._LABELS[self.phase(node_id, t)]
 
-    def allows(self, node_id: int, orientation: Orientation,
-               turn: TurnType, t: float) -> bool:
-        """Whether a movement may proceed now under protected phasing.
+    def _movement_phase(self, orientation: Orientation, turn: TurnType) -> int:
+        """Phase serving a movement under protected phasing.
 
         Through (and right) movements are served in phase 0 (horizontal) or 2
         (vertical); left turns (and U-turns) get their own phase, 1 (horizontal)
         or 3 (vertical). Because a left never shares a phase with the opposing
-        through movement, protected lefts never cross oncoming traffic. Returns
-        ``True`` if the ``orientation`` + ``turn`` movement is green at
-        ``node_id`` at time ``t``.
+        through movement, protected lefts never cross oncoming traffic.
         """
-        k = self.phase(node_id, t)
         is_left = turn in (TurnType.LEFT, TurnType.UTURN)
         if orientation is Orientation.HORIZONTAL:
-            return k == (1 if is_left else 0)
-        return k == (3 if is_left else 2)
+            return 1 if is_left else 0
+        return 3 if is_left else 2
 
 
 class SignalSystem:
@@ -340,12 +390,12 @@ class SignalSystem:
         return self.controller.allows(node_id, orientation, turn, t)
 
     def allows_movement(self, from_edge: int, to_edge: int, t: float) -> bool:
-        """Whether a car may cross from ``from_edge`` onto ``to_edge`` at ``t``.
+        """Whether a car has a full green to cross ``from_edge`` -> ``to_edge``.
 
-        This is the question :meth:`TrafficSim.step` asks before letting a car
-        leave its edge. The movement is resolved to the approach orientation of
-        ``from_edge`` and the :func:`turn_type` of the turn, then passed to the
-        controller. Always ``True`` at an unsignalized node.
+        The movement is resolved to the approach orientation of ``from_edge`` and
+        the :func:`turn_type` of the turn, then passed to the controller. Always
+        ``True`` at an unsignalized node. See :meth:`movement_state` for the
+        three-colour form the simulation uses (so it can act on yellow).
         """
         node_id = self.net.edges[from_edge].v
         if not self._signalized[node_id]:
@@ -353,6 +403,42 @@ class SignalSystem:
         orientation = self._orientation[from_edge]
         turn = turn_type(self.net, from_edge, to_edge)
         return self.controller.allows(node_id, orientation, turn, t)
+
+    def _controller_state(self, node_id: int, orientation: Orientation,
+                          turn: TurnType, t: float) -> SignalState:
+        """The controller's three-colour state, deriving it from ``allows`` for
+        controllers that predate :meth:`SignalController.state`."""
+        state_fn = getattr(self.controller, "state", None)
+        if state_fn is not None:
+            return state_fn(node_id, orientation, turn, t)
+        return (SignalState.GREEN
+                if self.controller.allows(node_id, orientation, turn, t)
+                else SignalState.RED)
+
+    def state(self, node_id: int, orientation: Orientation,
+              turn: TurnType, t: float) -> SignalState:
+        """Three-colour state for a movement (green at an unsignalized node).
+
+        Used by the renderer to colour each movement indicator green / amber /
+        red."""
+        if not self._signalized[node_id]:
+            return SignalState.GREEN
+        return self._controller_state(node_id, orientation, turn, t)
+
+    def movement_state(self, from_edge: int, to_edge: int, t: float) -> SignalState:
+        """Three-colour signal for a car crossing ``from_edge`` -> ``to_edge``.
+
+        This is what :meth:`TrafficSim.step` queries: ``GREEN`` proceeds, ``RED``
+        stops, and ``YELLOW`` means stop only if the car can still do so
+        comfortably (else it commits through). Always ``GREEN`` at an
+        unsignalized node.
+        """
+        node_id = self.net.edges[from_edge].v
+        if not self._signalized[node_id]:
+            return SignalState.GREEN
+        orientation = self._orientation[from_edge]
+        turn = turn_type(self.net, from_edge, to_edge)
+        return self._controller_state(node_id, orientation, turn, t)
 
     def is_green(self, edge_id: int, t: float) -> bool:
         """Convenience: may a car proceed *straight* off ``edge_id`` at ``t``?

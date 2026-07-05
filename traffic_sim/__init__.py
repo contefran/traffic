@@ -12,6 +12,7 @@ from .routing import RandomRouter, ShortestPathRouter
 from .signals import (
     Orientation,
     TurnType,
+    SignalState,
     SignalPlan,
     FixedTimeController,
     ProtectedPhaseController,
@@ -33,6 +34,7 @@ __all__ = [
     "ShortestPathRouter",
     "Orientation",
     "TurnType",
+    "SignalState",
     "SignalPlan",
     "FixedTimeController",
     "ProtectedPhaseController",

@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     net = p.add_argument_group("network")
     net.add_argument("--width", type=int, default=8, help="grid columns")
     net.add_argument("--height", type=int, default=8, help="grid rows")
-    net.add_argument("--block", type=float, default=60.0, help="block spacing [m]")
+    net.add_argument("--block", type=float, default=150.0, help="block spacing [m]")
     net.add_argument("--seed", type=int, default=1, help="network RNG seed")
     net.add_argument("--jitter", type=float, default=0.22,
                      help="node position jitter, as a fraction of block")
@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="probability a (non-arterial) connection is missing")
     net.add_argument("--arterial-every", type=int, default=3,
                      help="every Nth row/column is an arterial (0 = none)")
-    net.add_argument("--arterial-speed", type=float, default=90.0,
+    net.add_argument("--arterial-speed", type=float, default=70.0,
                      help="arterial speed limit [km/h]")
 
     traffic = p.add_argument_group("traffic")
@@ -72,8 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
     control = p.add_argument_group("control")
     control.add_argument("--controller", choices=("protected", "fixed"),
                          default="protected", help="signal controller")
-    control.add_argument("--green-time", type=float, default=5.0,
+    control.add_argument("--green-time", type=float, default=4.5,
                          help="green duration per phase [s]")
+    control.add_argument("--yellow", type=float, default=1.5,
+                         help="yellow/clearance interval per phase [s]")
     control.add_argument("--priority", action=argparse.BooleanOptionalAction,
                          default=True,
                          help="right-of-way at unsignalized nodes")
@@ -106,9 +108,9 @@ def build_simulation(args):
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
     router = (ShortestPathRouter(net, seed=args.router_seed) if args.router == "shortest"
               else RandomRouter(net, seed=args.router_seed))
-    controller = (ProtectedPhaseController(green_time=args.green_time)
+    controller = (ProtectedPhaseController(green_time=args.green_time, yellow=args.yellow)
                   if args.controller == "protected"
-                  else FixedTimeController(green_time=args.green_time))
+                  else FixedTimeController(green_time=args.green_time, yellow=args.yellow))
     signals = SignalSystem(net, controller)
     priority = PriorityModel(net) if args.priority else None
     metrics = MetricsCollector()
