@@ -22,6 +22,7 @@ from traffic_sim import (
     FixedTimeController,
     SignalSystem,
     PriorityModel,
+    PermissiveLeftModel,
     MetricsCollector,
     kmh_to_ms,
     ms_to_kmh,
@@ -35,7 +36,8 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
     cars = []
     for i in range(n_cars):
         edge = rng.choice(net.edges)
-        cars.append(Car(id=i, edge_id=edge.id, s=rng.uniform(0.0, edge.length), v=0.0))
+        cars.append(Car(id=i, edge_id=edge.id, s=rng.uniform(0.0, edge.length),
+                        v=0.0, lane=rng.randrange(edge.lanes)))
     return cars
 
 
@@ -61,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="every Nth row/column is an arterial (0 = none)")
     net.add_argument("--arterial-speed", type=float, default=70.0,
                      help="arterial speed limit [km/h]")
+    net.add_argument("--arterial-lanes", type=int, default=2, help="lanes per arterial")
+    net.add_argument("--ring", action=argparse.BooleanOptionalAction, default=True,
+                     help="make the perimeter a fast multi-lane ring road")
+    net.add_argument("--ring-speed", type=float, default=100.0,
+                     help="ring speed limit [km/h]")
+    net.add_argument("--ring-lanes", type=int, default=3, help="lanes on the ring")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=60, help="number of cars")
@@ -103,6 +111,9 @@ def build_simulation(args):
         one_way_prob=args.one_way_prob, drop_prob=args.drop_prob,
         arterial_every=args.arterial_every,
         arterial_speed=kmh_to_ms(args.arterial_speed),
+        arterial_lanes=args.arterial_lanes,
+        ring=args.ring, ring_speed=kmh_to_ms(args.ring_speed),
+        ring_lanes=args.ring_lanes,
     )
 
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
@@ -113,9 +124,10 @@ def build_simulation(args):
                   else FixedTimeController(green_time=args.green_time, yellow=args.yellow))
     signals = SignalSystem(net, controller)
     priority = PriorityModel(net) if args.priority else None
+    left_turn = PermissiveLeftModel(net)   # inert under protected phasing
     metrics = MetricsCollector()
     sim = TrafficSim(net, cars, router, signals=signals, priority=priority,
-                     metrics=metrics)
+                     left_turn=left_turn, metrics=metrics)
     return net, sim
 
 

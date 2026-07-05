@@ -15,6 +15,9 @@ import random
 # Default speed limit: ~50 km/h expressed in m/s.
 DEFAULT_SPEED_LIMIT = 13.9
 
+# Lane width [m], used only to lay lanes out side by side for rendering.
+LANE_WIDTH = 3.5
+
 
 @dataclass
 class Node:
@@ -68,11 +71,30 @@ class RoadNetwork:
     node_id: Dict[Tuple[int, int], int]  # (i, j) -> node id
 
     def point_on_edge(self, edge_id: int, s: float) -> Tuple[float, float]:
-        """World (x, y) of a point ``s`` metres along ``edge_id``."""
+        """World (x, y) of a point ``s`` metres along ``edge_id`` (centreline)."""
         e = self.edges[edge_id]
         n1, n2 = self.nodes[e.u], self.nodes[e.v]
         t = s / e.length if e.length > 0 else 0.0
         return (n1.x + t * (n2.x - n1.x), n1.y + t * (n2.y - n1.y))
+
+    def point_on_edge_lane(self, edge_id: int, s: float, lane: int) -> Tuple[float, float]:
+        """World (x, y) of a car in ``lane`` at ``s`` along ``edge_id``.
+
+        Offsets the centreline point sideways so each lane draws in its own
+        track: lanes are numbered 0 (rightmost) upward, spaced ``LANE_WIDTH``
+        apart, laid out to the right of the direction of travel. Rendering only —
+        the dynamics work in ``(edge, lane, s)``.
+        """
+        e = self.edges[edge_id]
+        cx, cy = self.point_on_edge(edge_id, s)
+        if e.length <= 0:
+            return cx, cy
+        n1, n2 = self.nodes[e.u], self.nodes[e.v]
+        dx, dy = (n2.x - n1.x) / e.length, (n2.y - n1.y) / e.length
+        # Right-hand perpendicular to the heading; lanes stack from the centre.
+        px, py = dy, -dx
+        offset = (lane - (e.lanes - 1) / 2.0) * LANE_WIDTH
+        return cx + px * offset, cy + py * offset
 
     def bounds(self) -> Tuple[float, float, float, float]:
         """(min_x, min_y, max_x, max_y) over all nodes."""
@@ -134,6 +156,10 @@ def build_city_grid(
     drop_prob: float = 0.0,
     arterial_every: int = 0,
     arterial_speed: float = 25.0,
+    arterial_lanes: int = 2,
+    ring: bool = False,
+    ring_speed: float = 30.0,
+    ring_lanes: int = 3,
 ) -> RoadNetwork:
     """A heterogeneous grid: same ``(i, j)`` topology as :func:`build_grid_network`
     (so the H/V signal model still applies) but with cheap realism added.
@@ -147,8 +173,15 @@ def build_city_grid(
       never dropped, which keeps the through-routes intact and the map mostly
       connected. Raises topological irregularity without breaking the ``(i, j)``
       indexing the signal model relies on.
-    * ``arterial_every`` / ``arterial_speed`` — every ``arterial_every``-th row and
-      column is an arterial whose edges get the higher ``arterial_speed`` limit.
+    * ``arterial_every`` / ``arterial_speed`` / ``arterial_lanes`` — every
+      ``arterial_every``-th row and column is an arterial with the higher
+      ``arterial_speed`` limit and ``arterial_lanes`` lanes (default 2).
+    * ``ring`` / ``ring_speed`` / ``ring_lanes`` — when ``ring=True`` the grid's
+      perimeter (border rows/columns) becomes a fast ring road: ``ring_speed``
+      limit and ``ring_lanes`` lanes (default 3). Ring beats arterial beats local.
+      Everything else is a single-lane local street at ``DEFAULT_SPEED_LIMIT``.
+      (Lane counts populate ``Edge.lanes``; the dynamics use them once the
+      multi-lane model is enabled.)
 
     ``block`` should be *physically coherent* with the speeds: a car must be able
     to stop within a block, i.e. ``block`` comfortably larger than the braking
@@ -180,44 +213,53 @@ def build_city_grid(
 
     edges: List[Edge] = []
 
-    def add_edge(u: int, v: int, speed: float) -> None:
-        """Append one directed edge ``u -> v`` with the given speed limit."""
+    def add_edge(u: int, v: int, speed: float, lanes: int = 1) -> None:
+        """Append one directed edge ``u -> v`` with the given speed limit / lanes."""
         n1, n2 = nodes[u], nodes[v]
         length = math.hypot(n2.x - n1.x, n2.y - n1.y)
         eid = len(edges)
-        edges.append(Edge(id=eid, u=u, v=v, length=length, speed_limit=speed))
+        edges.append(Edge(id=eid, u=u, v=v, length=length,
+                          lanes=lanes, speed_limit=speed))
         nodes[u].out_edges.append(eid)
         nodes[v].in_edges.append(eid)
 
-    def connect(u: int, v: int, speed: float, arterial: bool) -> None:
+    def connect(u: int, v: int, speed: float, lanes: int, protected: bool) -> None:
         """Connect neighbours ``u`` and ``v``, honouring ``drop_prob`` (skip the
         connection) and ``one_way_prob`` (a single directed edge instead of a
-        two-way pair). Arterial connections are never dropped."""
-        if not arterial and drop_prob and rng.random() < drop_prob:
+        two-way pair). ``protected`` connections (ring, arterial) are never
+        dropped, keeping the through-routes intact."""
+        if not protected and drop_prob and rng.random() < drop_prob:
             return
         if one_way_prob and rng.random() < one_way_prob:
             # One-way: keep a single direction (chosen at random).
             a, b = (u, v) if rng.random() < 0.5 else (v, u)
-            add_edge(a, b, speed)
+            add_edge(a, b, speed, lanes)
         else:
-            add_edge(u, v, speed)
-            add_edge(v, u, speed)
+            add_edge(u, v, speed, lanes)
+            add_edge(v, u, speed, lanes)
 
     def is_arterial(index: int) -> bool:
         """Whether grid row/column ``index`` is an arterial (higher speed)."""
         return arterial_every > 0 and index % arterial_every == 0
 
+    def classify(on_border: bool, index: int):
+        """Return ``(speed, lanes, protected)`` for a connection. A perimeter
+        (ring) connection wins over arterial, which wins over local."""
+        if ring and on_border:
+            return ring_speed, ring_lanes, True
+        if is_arterial(index):
+            return arterial_speed, arterial_lanes, True
+        return DEFAULT_SPEED_LIMIT, 1, False
+
     for j in range(height):
         for i in range(width):
             u = node_id[(i, j)]
             if i + 1 < width:  # horizontal connection lies on row j
-                art = is_arterial(j)
-                speed = arterial_speed if art else DEFAULT_SPEED_LIMIT
-                connect(u, node_id[(i + 1, j)], speed, art)
+                speed, lanes, prot = classify(j == 0 or j == height - 1, j)
+                connect(u, node_id[(i + 1, j)], speed, lanes, prot)
             if j + 1 < height:  # vertical connection lies on column i
-                art = is_arterial(i)
-                speed = arterial_speed if art else DEFAULT_SPEED_LIMIT
-                connect(u, node_id[(i, j + 1)], speed, art)
+                speed, lanes, prot = classify(i == 0 or i == width - 1, i)
+                connect(u, node_id[(i, j + 1)], speed, lanes, prot)
 
     def grid_neighbours(node: Node):
         """Yield the node ids of ``node``'s existing grid neighbours (E/W/N/S)."""

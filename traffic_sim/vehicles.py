@@ -26,6 +26,7 @@ class Car:
     edge_id: int
     s: float        # position along edge, in [0, edge.length]
     v: float        # speed [m/s]
+    lane: int = 0   # lane index on the current edge, 0 = rightmost
 
     # The edge this car will move onto at the end of the current one. Committed
     # in advance (before the stop line) so the signal can gate the specific

@@ -19,6 +19,7 @@ from .signals import (
     SignalSystem,
 )
 from .priority import PriorityModel
+from .left_turns import PermissiveLeftModel
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
 from .units import kmh_to_ms, ms_to_kmh
 
@@ -40,6 +41,7 @@ __all__ = [
     "ProtectedPhaseController",
     "SignalSystem",
     "PriorityModel",
+    "PermissiveLeftModel",
     "MetricsCollector",
     "StepMetrics",
     "TripMetrics",
