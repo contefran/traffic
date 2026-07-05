@@ -197,7 +197,9 @@ class MetricsCollector:
         self.trips.append(TripMetrics(
             car_id=car.id, start_t=state["start_t"], end_t=t,
             travel_time=travel, free_flow_time=state["free_flow"],
-            delay=travel - state["free_flow"],
+            # Clamp at 0: an edge-point stops just before its node, so the
+            # node-based baseline can marginally exceed the actual time.
+            delay=max(0.0, travel - state["free_flow"]),
             stops=state["stops"], stopped_time=state["stopped_time"]))
 
     def _update_trip(self, car, sim, t: float, dt: float, free_flow) -> None:

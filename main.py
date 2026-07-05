@@ -85,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="simulated seconds in one day (four periods)")
     demand.add_argument("--residential-speed", action=argparse.BooleanOptionalAction,
                         default=True, help="slow local streets in residential zones to 30 km/h")
+    demand.add_argument("--edge-points", action=argparse.BooleanOptionalAction,
+                        default=True, help="destinations are mid-block points, not junctions")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=60, help="number of cars")
@@ -140,7 +142,8 @@ def build_simulation(args):
     demand = (DemandModel(net, zones, seed=args.router_seed, day_length=args.day_length)
               if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
-    router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand)
+    router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
+                                 edge_points=args.edge_points)
               if args.router == "shortest"
               else RandomRouter(net, seed=args.router_seed))
     controller = (ProtectedPhaseController(green_time=args.green_time, yellow=args.yellow)

@@ -38,6 +38,10 @@ class Car:
     # destination-aware router reads this to steer toward ``dest`` and assigns
     # a fresh one when the car arrives.
     dest: Optional[int] = None
+    # Where along the final approach edge the destination actually is, as a
+    # fraction in (0, 1]: 1.0 = the intersection itself, <1 = a point mid-block
+    # (an address on the street). Only used with park-and-dwell.
+    dest_frac: float = 1.0
 
     # Physical / behavioural parameters (per-car so they can be varied).
     max_speed: float = 50.0       # [m/s] hard cap on desired speed

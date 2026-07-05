@@ -273,6 +273,9 @@ class TrafficSim:
                 # stops at the node and is parked in the pass below.
                 arriving = (self.parking is not None and car.dest is not None
                             and edge.v == car.dest)
+                # The destination point along this final edge (mid-block if
+                # ``dest_frac`` < 1, else the node); the car stops here.
+                stop_pos = edge.length * car.dest_frac if arriving else None
                 if car.next_edge is None and not arriving:
                     car.next_edge = self.router.next_edge(edge_id, car)
 
@@ -313,18 +316,16 @@ class TrafficSim:
                                                      fronts.get(edge.v, []))):
                     red = True
 
-                # Arriving at its destination: brake for the node like a stop
-                # line, so the car halts smoothly there before being parked.
-                if arriving:
-                    red = True
-
-                # Constraints ahead, each (gap, speed): the leader and/or, on
-                # red, the stop line at the end of the edge (a stopped object).
+                # Constraints ahead, each (gap, speed): the leader, a red stop
+                # line at the end of the edge, and/or (when arriving) the
+                # destination point mid-block — all stationary obstacles.
                 obstacles = []
                 if leader is not None:
                     obstacles.append((leader.s - car.s - car.length, leader.v))
                 if red:
                     obstacles.append((edge.length - car.s, 0.0))
+                if stop_pos is not None:
+                    obstacles.append((stop_pos - car.s, 0.0))
 
                 # Most restrictive (smallest) IDM acceleration over obstacles.
                 if obstacles:
@@ -353,6 +354,8 @@ class TrafficSim:
                     max_s = leader.s - car.length - LEADER_BUFFER
                 if red:
                     max_s = edge.length if max_s is None else min(max_s, edge.length)
+                if stop_pos is not None:
+                    max_s = stop_pos if max_s is None else min(max_s, stop_pos)
                 if max_s is not None and new_s > max_s:
                     self.crashes += 1
                     new_s = max(car.s, max_s)
@@ -390,8 +393,9 @@ class TrafficSim:
                 if not car.active or car.dest is None or car.next_edge is not None:
                     continue
                 edge = self.net.edges[car.edge_id]
+                stop_pos = edge.length * car.dest_frac      # mid-block if <1
                 if (edge.v == car.dest and car.v <= 0.5
-                        and edge.length - car.s <= 3.0):
+                        and stop_pos - car.s <= 3.0):
                     car.active = False
                     car.wake_t = self.t + self.parking.dwell_time(car.dest)
 

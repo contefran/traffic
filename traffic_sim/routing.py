@@ -74,7 +74,8 @@ class ShortestPathRouter:
     re-routes next step. Seeded for determinism.
     """
 
-    def __init__(self, net: RoadNetwork, seed: int = 0, demand=None) -> None:
+    def __init__(self, net: RoadNetwork, seed: int = 0, demand=None,
+                 edge_points: bool = False) -> None:
         """``seed`` fixes the random destination assignments and the
         tie-break used when a destination is unreachable, for reproducible runs.
         Per-destination cost tables are computed lazily and cached here.
@@ -87,6 +88,9 @@ class ShortestPathRouter:
         self.net = net
         self.rng = random.Random(seed)
         self.demand = demand
+        # When True, each destination is a point mid-block (a random fraction
+        # along the final edge) rather than the intersection itself.
+        self.edge_points = edge_points
         self.now = 0.0   # current sim time, refreshed by TrafficSim each step
         # dest node id -> {node id: free-flow cost to reach dest}
         self._dist_cache: Dict[int, Dict[int, float]] = {}
@@ -135,6 +139,8 @@ class ShortestPathRouter:
         From the :class:`~traffic_sim.demand.DemandModel` if one is attached
         (time-of-day, zone-based), otherwise uniform random.
         """
+        # A point mid-block for an address, or 1.0 for the intersection itself.
+        car.dest_frac = self.rng.uniform(0.3, 0.9) if self.edge_points else 1.0
         if self.demand is not None and avoid is not None:
             car.dest = self.demand.next_destination(avoid, self.now)
             return car.dest
