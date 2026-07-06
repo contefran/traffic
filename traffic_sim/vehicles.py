@@ -67,6 +67,10 @@ class Car:
     # when the simulation clock reaches ``wake_t``.
     active: bool = True
     wake_t: float = 0.0
+    # This agent's morning departure time (sim-seconds within a day), set by a
+    # :class:`~traffic_sim.schedule.DailySchedule`. When the car parks at its own
+    # home the sim sleeps it until the next occurrence of this time.
+    depart_time: float = 0.0
 
     # History of (t, edge_id, s) samples, for debugging / metrics.
     trail: deque = field(default_factory=lambda: deque(maxlen=200))

@@ -28,6 +28,7 @@ from traffic_sim import (
     add_grade_separated,
     DemandModel,
     ParkingModel,
+    DailySchedule,
     MetricsCollector,
     kmh_to_ms,
     ms_to_kmh,
@@ -127,6 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
                         default=True, help="slow local streets in residential zones to 30 km/h")
     demand.add_argument("--edge-points", action=argparse.BooleanOptionalAction,
                         default=True, help="destinations are mid-block points, not junctions")
+    demand.add_argument("--schedule", action=argparse.BooleanOptionalAction, default=True,
+                        help="per-car daily routine: sleep at home, staggered morning departures")
+    demand.add_argument("--night-fraction", type=float, default=0.15,
+                        help="fraction of cars already out on the road at midnight")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=1000, help="number of cars")
@@ -197,6 +202,13 @@ def build_simulation(args):
               if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
     assign_homes(cars, zones, seed=args.car_seed)   # each car returns to its own house
+    # Per-car daily routine: most cars start asleep at home and depart on a
+    # staggered morning schedule, so the rush builds organically from midnight.
+    schedule = (DailySchedule(day_length=args.day_length, seed=args.car_seed,
+                              night_fraction=args.night_fraction)
+                if args.schedule else None)
+    if schedule is not None:
+        schedule.assign(cars, net)
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)
               if args.router == "shortest"
@@ -220,7 +232,8 @@ def build_simulation(args):
     parking = ParkingModel(seed=args.car_seed, zones=zones) if args.parking else None
     metrics = MetricsCollector()
     sim = TrafficSim(net, cars, router, signals=signals, priority=priority,
-                     left_turn=left_turn, parking=parking, metrics=metrics)
+                     left_turn=left_turn, parking=parking, metrics=metrics,
+                     schedule=schedule)
     return net, sim, zones
 
 

@@ -24,6 +24,7 @@ from .zones import LandUse, assign_zones, edges_by_zone, apply_zone_speeds
 from .grade import add_grade_separated
 from .demand import DemandModel, Period
 from .parking import ParkingModel
+from .schedule import DailySchedule
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
 from .units import kmh_to_ms, ms_to_kmh
 
@@ -54,6 +55,7 @@ __all__ = [
     "DemandModel",
     "Period",
     "ParkingModel",
+    "DailySchedule",
     "MetricsCollector",
     "StepMetrics",
     "TripMetrics",
