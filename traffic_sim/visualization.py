@@ -450,9 +450,20 @@ class Visuals:
             fig.subplots_adjust(left=0.06, right=0.66)
 
         # Cars in near-black so they stay salient over the coloured land wash
-        # (blue would clash with the office zone).
+        # (blue would clash with the office zone). Active cars are semi-transparent
+        # so overlapping traffic builds up colour density — jams read darker;
+        # parked / asleep cars nearly vanish (tiny, very faint) so the map shows
+        # moving traffic, not the whole parked fleet.
         car_color = "#1a1a1a" if zones is not None else "tab:blue"
-        scat = ax.scatter([], [], s=34, color=car_color, zorder=5)
+        scat = ax.scatter([], [], s=32, color=car_color, alpha=0.55,
+                          edgecolors="none", zorder=5)
+        parked = ax.scatter([], [], s=4, color=car_color, alpha=0.12,
+                            edgecolors="none", zorder=3)
+
+        def _offsets(cars):
+            """Screen positions for ``cars`` as an (N, 2) array (empty-safe)."""
+            pts = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars]
+            return np.array(pts) if pts else np.empty((0, 2))
 
         # Live wall clock: map sim time onto a midnight→midnight day.
         if day_length is None:
@@ -475,11 +486,12 @@ class Visuals:
 
         def dynamic():
             """The blit artists that change each frame (skip the absent ones)."""
-            return tuple(a for a in (scat, sig_scat, clock) if a is not None)
+            return tuple(a for a in (scat, parked, sig_scat, clock) if a is not None)
 
         def init():
-            """Blit initialiser: empty car scatter, clock at the start of the day."""
+            """Blit initialiser: empty car scatters, clock at the start of the day."""
             scat.set_offsets(np.empty((0, 2)))
+            parked.set_offsets(np.empty((0, 2)))
             if clock is not None:
                 clock.set_text(clock_label(sim.t))
             return dynamic()
@@ -488,8 +500,8 @@ class Visuals:
             """Advance the sim ``steps_per_frame`` steps and redraw cars/signals/clock."""
             for _ in range(steps_per_frame):
                 sim.step(dt)
-            points = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in sim.cars]
-            scat.set_offsets(np.array(points) if points else np.empty((0, 2)))
+            scat.set_offsets(_offsets([c for c in sim.cars if c.active]))
+            parked.set_offsets(_offsets([c for c in sim.cars if not c.active]))
             if sig_scat is not None:
                 sig_scat.set_color(self._signal_colors(signals, sim.t, specs))
             if clock is not None:

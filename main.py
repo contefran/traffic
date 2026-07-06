@@ -139,8 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="node position jitter, as a fraction of block")
     net.add_argument("--one-way-prob", type=float, default=0.15,
                      help="probability a connection is one-way")
-    net.add_argument("--drop-prob", type=float, default=0.12,
-                     help="probability a (non-arterial) connection is missing")
+    net.add_argument("--drop-prob", type=float, default=0.28,
+                     help="probability a (non-arterial) connection is missing "
+                          "(higher = more T-junctions, fewer full 4-way crossings)")
     net.add_argument("--arterial-every", type=int, default=3,
                      help="every Nth row/column is an arterial (0 = none)")
     net.add_argument("--arterial-speed", type=float, default=70.0,
@@ -155,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="metres between ring on/off ramps (>=1 per side)")
     net.add_argument("--grade", action=argparse.BooleanOptionalAction, default=True,
                      help="elevate the ring + a cross-city expressway (grade-separated)")
-    net.add_argument("--roundabouts", type=int, default=6,
+    net.add_argument("--roundabouts", type=int, default=12,
                      help="number of local crossings to build as geometric roundabouts")
 
     demand = p.add_argument_group("demand & land use")
