@@ -37,6 +37,8 @@ GREEN_PERMISSIVE = 2 * GREEN_PROTECTED + YELLOW   # 10.5 -> both cycles = 24 s
 
 
 def _controller(name: str):
+    """Build the signal controller for ``name`` (``"permissive"`` or ``"protected"``),
+    each timed so the two run on a matched cycle (see the cycle constants above)."""
     if name == "permissive":
         return FixedTimeController(green_time=GREEN_PERMISSIVE, yellow=YELLOW)
     return ProtectedPhaseController(green_time=GREEN_PROTECTED, yellow=YELLOW)
@@ -82,6 +84,7 @@ def render(rows: List[dict], path: str = "experiments/figures/q18_protected_vs_p
     loads = sorted({r["load"] for r in rows})
 
     def series(controller, key):
+        """``key`` values for ``controller``, ordered to match ``loads`` (the x-axis)."""
         by = {r["load"]: r[key] for r in rows if r["controller"] == controller}
         return [by[l] for l in loads]
 

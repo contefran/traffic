@@ -20,10 +20,11 @@ from .signals import (
 )
 from .priority import PriorityModel
 from .left_turns import PermissiveLeftModel
-from .zones import LandUse, assign_zones, nodes_by_zone, apply_zone_speeds
+from .zones import LandUse, assign_zones, edges_by_zone, apply_zone_speeds
 from .grade import add_grade_separated
 from .demand import DemandModel, Period
 from .parking import ParkingModel
+from .schedule import DailySchedule
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
 from .units import kmh_to_ms, ms_to_kmh
 
@@ -48,12 +49,13 @@ __all__ = [
     "PermissiveLeftModel",
     "LandUse",
     "assign_zones",
-    "nodes_by_zone",
+    "edges_by_zone",
     "apply_zone_speeds",
     "add_grade_separated",
     "DemandModel",
     "Period",
     "ParkingModel",
+    "DailySchedule",
     "MetricsCollector",
     "StepMetrics",
     "TripMetrics",

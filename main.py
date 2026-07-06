@@ -28,6 +28,7 @@ from traffic_sim import (
     add_grade_separated,
     DemandModel,
     ParkingModel,
+    DailySchedule,
     MetricsCollector,
     kmh_to_ms,
     ms_to_kmh,
@@ -61,6 +62,26 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
         else:                                   # no clear slot found; place anyway
             cars.append(Car(id=i, edge_id=edge.id, s=s, v=0.0, lane=lane))
     return cars
+
+
+def assign_homes(cars, zones, seed: int = 0):
+    """Give every car a ``home`` (a residential street it returns to).
+
+    Residential streets are dealt out so that **every one gets at least one home**
+    before any is reused: the shuffled list of residential edges is handed to the
+    first cars one-each, and any remaining cars get a random residential street.
+    A no-op when there are no residential streets. Deterministic under ``seed``.
+    """
+    from traffic_sim import LandUse
+
+    residential = [eid for eid, use in zones.items() if use is LandUse.RESIDENTIAL]
+    if not residential:
+        return
+    rng = random.Random(seed)
+    order = residential[:]
+    rng.shuffle(order)
+    for i, car in enumerate(cars):
+        car.home = order[i] if i < len(order) else rng.choice(residential)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,6 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
                         default=True, help="slow local streets in residential zones to 30 km/h")
     demand.add_argument("--edge-points", action=argparse.BooleanOptionalAction,
                         default=True, help="destinations are mid-block points, not junctions")
+    demand.add_argument("--schedule", action=argparse.BooleanOptionalAction, default=True,
+                        help="per-car daily routine: sleep at home, staggered morning departures")
+    demand.add_argument("--night-fraction", type=float, default=0.15,
+                        help="fraction of cars already out on the road at midnight")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=1000, help="number of cars")
@@ -128,20 +153,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = p.add_argument_group("run / output")
     run.add_argument("--dt", type=float, default=0.1, help="time step [s]")
-    run.add_argument("--steps", type=int, default=800, help="number of steps")
+    run.add_argument("--steps", type=int, default=None,
+                     help="number of steps (default: one full day = day-length / dt, "
+                          "so the run goes midnight -> midnight)")
     run.add_argument("--save-gif", metavar="PATH", default=None,
                      help="render headless to this GIF instead of a live window")
-    run.add_argument("--fps", type=int, default=20, help="GIF frame rate")
+    run.add_argument("--fps", type=int, default=30,
+                     help="target frame rate for the live window and the GIF")
+    run.add_argument("--steps-per-frame", type=int, default=1,
+                     help="advance N sim steps per rendered frame (Nx faster "
+                          "playback; higher = choppier motion)")
+    run.add_argument("--no-show-signals", dest="show_signals", action="store_false",
+                     help="hide the traffic-light markers (declutters big maps; "
+                          "signals still operate)")
 
     return p
 
 
 def build_simulation(args):
-    """Assemble ``(net, sim)`` from parsed ``args``.
+    """Assemble ``(net, sim, zones)`` from parsed ``args``.
 
     Speeds in ``args`` are km/h and are converted to SI here (the only place the
     boundary conversion happens). A :class:`MetricsCollector` is always attached
-    so the run reports its flow statistics.
+    so the run reports its flow statistics. The land-use ``zones`` map is returned
+    alongside so the visualiser can colour the demo by zone.
     """
     net = build_city_grid(
         width=args.width, height=args.height, block=args.block,
@@ -166,6 +201,14 @@ def build_simulation(args):
     demand = (DemandModel(net, zones, seed=args.router_seed, day_length=args.day_length)
               if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
+    assign_homes(cars, zones, seed=args.car_seed)   # each car returns to its own house
+    # Per-car daily routine: most cars start asleep at home and depart on a
+    # staggered morning schedule, so the rush builds organically from midnight.
+    schedule = (DailySchedule(day_length=args.day_length, seed=args.car_seed,
+                              night_fraction=args.night_fraction)
+                if args.schedule else None)
+    if schedule is not None:
+        schedule.assign(cars, net)
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)
               if args.router == "shortest"
@@ -189,23 +232,32 @@ def build_simulation(args):
     parking = ParkingModel(seed=args.car_seed, zones=zones) if args.parking else None
     metrics = MetricsCollector()
     sim = TrafficSim(net, cars, router, signals=signals, priority=priority,
-                     left_turn=left_turn, parking=parking, metrics=metrics)
-    return net, sim
+                     left_turn=left_turn, parking=parking, metrics=metrics,
+                     schedule=schedule)
+    return net, sim, zones
 
 
 def main(argv=None) -> None:
     """Parse arguments, build the simulation, run it, and report metrics."""
     args = build_parser().parse_args(argv)
-    net, sim = build_simulation(args)
-    print(f"nodes={len(net.nodes)} edges={len(net.edges)} cars={args.cars}")
+    # Default the run to exactly one day so the clock goes midnight -> midnight.
+    if args.steps is None:
+        args.steps = max(1, round(args.day_length / args.dt))
+    net, sim, zones = build_simulation(args)
+    print(f"nodes={len(net.nodes)} edges={len(net.edges)} cars={args.cars} "
+          f"steps={args.steps} (day={args.day_length:.0f}s)")
 
     visuals = Visuals()
     if args.save_gif:
         visuals.save_animation(net, sim, args.save_gif,
-                               dt=args.dt, steps=args.steps, fps=args.fps)
+                               dt=args.dt, steps=args.steps, fps=args.fps, zones=zones,
+                               show_signals=args.show_signals, day_length=args.day_length,
+                               steps_per_frame=args.steps_per_frame)
         print(f"saved animation to {args.save_gif}")
     else:
-        visuals.animate_sim(net, sim, dt=args.dt, steps=args.steps)
+        visuals.animate_sim(net, sim, dt=args.dt, steps=args.steps, zones=zones,
+                            show_signals=args.show_signals, day_length=args.day_length,
+                            fps=args.fps, steps_per_frame=args.steps_per_frame)
 
     # Metrics were recorded every step; report them (speed shown in km/h too).
     s = sim.metrics.summary()

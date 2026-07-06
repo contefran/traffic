@@ -51,6 +51,7 @@ class TrafficSim:
         left_turn=None,
         parking=None,
         metrics=None,
+        schedule=None,
     ) -> None:
         """Wire up the simulation.
 
@@ -58,8 +59,11 @@ class TrafficSim:
         of ``None`` means every approach is always green; ``priority`` of
         ``None`` means unsignalized nodes are an unchecked free-for-all;
         ``left_turn`` of ``None`` means permissive lefts turn freely (no yielding
-        to oncoming); ``metrics`` of ``None`` means nothing is recorded. ``cars``
-        is mutated in place as the simulation runs.
+        to oncoming); ``metrics`` of ``None`` means nothing is recorded.
+        ``schedule`` (a :class:`~traffic_sim.schedule.DailySchedule`) makes a car
+        that parks *at its own home* sleep until its next morning departure;
+        ``None`` uses the plain park-and-dwell for every stop. ``cars`` is mutated
+        in place as the simulation runs.
         """
         self.net = net
         self.cars = cars
@@ -71,6 +75,8 @@ class TrafficSim:
         self.left_turn = left_turn
         # Park-and-dwell lifecycle; None => cars sail through destinations.
         self.parking = parking
+        # Per-car daily routine; None => no home-overnight sleep (plain dwell).
+        self.schedule = schedule
         self.metrics = metrics  # optional MetricsCollector; observes each step
         self.t = 0.0
         # Genuine collisions: a car that could not stop in time even at its
@@ -267,8 +273,13 @@ class TrafficSim:
                 # With parking on, a car that has reached its destination edge
                 # does not route onward — it keeps ``next_edge = None`` so it
                 # stops at the node and is parked in the pass below.
-                arriving = (self.parking is not None and car.dest is not None
-                            and edge.v == car.dest)
+                # Arrived when on the specific destination street (edge-precise),
+                # or — for a manually set node destination without a dest_edge —
+                # on any edge into the destination node (the old behaviour).
+                arriving = (self.parking is not None and (
+                    (car.dest_edge is not None and edge_id == car.dest_edge)
+                    or (car.dest_edge is None and car.dest is not None
+                        and edge.v == car.dest)))
                 # The destination point along this final edge (mid-block if
                 # ``dest_frac`` < 1, else the node); the car stops here.
                 stop_pos = edge.length * car.dest_frac if arriving else None
@@ -297,8 +308,13 @@ class TrafficSim:
                 # yield to imminent oncoming through traffic (inert under
                 # protected phasing, where that traffic is red). A car committing
                 # on yellow is past the point of no return and is not gated here.
+                # Only at *signalized* nodes — at unsignalized ones (e.g. elevated
+                # ramp merges) movement_state is GREEN by default and right-of-way
+                # is the PriorityModel's job; applying it there would spuriously
+                # yield forever and deadlock the merge.
                 if (self.left_turn is not None and idx == 0
                         and sig_state is SignalState.GREEN
+                        and not self._unsignalized(edge.v)
                         and car.next_edge is not None
                         and self.left_turn.must_yield(edge_id, car.next_edge,
                                                       self.signals, self.t, cars_on_edge)):
@@ -390,10 +406,16 @@ class TrafficSim:
                     continue
                 edge = self.net.edges[car.edge_id]
                 stop_pos = edge.length * car.dest_frac      # mid-block if <1
-                if (edge.v == car.dest and car.v <= 0.5
-                        and stop_pos - car.s <= 3.0):
+                at_dest = (car.edge_id == car.dest_edge if car.dest_edge is not None
+                           else edge.v == car.dest)
+                if (at_dest and car.v <= 0.5 and stop_pos - car.s <= 3.0):
                     car.active = False
-                    car.wake_t = self.t + self.parking.dwell_time(car.dest)
+                    if self.schedule is not None and car.edge_id == car.home:
+                        # Home for the night: sleep until the next morning departure.
+                        car.wake_t = self.schedule.next_departure(car, self.t)
+                    else:
+                        # Dwell keyed on the street parked on (land use on edges).
+                        car.wake_t = self.t + self.parking.dwell_time(car.edge_id)
 
         self.t += dt
 

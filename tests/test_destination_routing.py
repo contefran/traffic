@@ -126,7 +126,10 @@ def test_assigns_destination_when_missing():
     nbr = net.node_id[(1, 0)]
     car = Car(id=0, edge_id=_edge_between(net, start, nbr), s=0.0, v=0.0)  # no dest
     router.next_edge(car.edge_id, car)
-    assert car.dest is not None and car.dest != nbr
+    # A fresh destination street was assigned (never the car's current edge), and
+    # the routing target is that street's upstream node.
+    assert car.dest_edge is not None and car.dest_edge != car.edge_id
+    assert car.dest == net.edges[car.dest_edge].u
 
 
 def test_deterministic_with_seed():

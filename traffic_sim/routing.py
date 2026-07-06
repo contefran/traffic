@@ -96,6 +96,10 @@ class ShortestPathRouter:
         # highway). Falls back to all nodes if levels aren't used.
         self._dest_nodes = [nd.id for nd in net.nodes if nd.level == 0] or \
             list(range(len(net.nodes)))
+        # Ground streets, for uniform-random edge destinations (no demand model).
+        self._dest_edges = [e.id for e in net.edges
+                            if net.nodes[e.u].level == 0 and net.nodes[e.v].level == 0] or \
+            [e.id for e in net.edges]
         # dest node id -> {node id: free-flow cost to reach dest}
         self._dist_cache: Dict[int, Dict[int, float]] = {}
 
@@ -138,22 +142,28 @@ class ShortestPathRouter:
         return self._dist_to(dest).get(origin, math.inf)
 
     def assign_destination(self, car: Car, avoid: Optional[int] = None) -> int:
-        """Give ``car`` a new destination node (never ``avoid``).
+        """Give ``car`` a new destination **street** and return its routing node.
 
-        From the :class:`~traffic_sim.demand.DemandModel` if one is attached
-        (time-of-day, zone-based), otherwise uniform random.
+        The destination is an edge (from the :class:`~traffic_sim.demand.
+        DemandModel` if attached — time-of-day, zone-based, residential trips
+        returning to ``car.home`` — otherwise uniform random). We store it in
+        ``car.dest_edge`` and set the routing target ``car.dest`` to that edge's
+        **upstream** node, so the car is steered there and then forced onto the
+        edge for the final hop (see :meth:`next_edge`), stopping ``dest_frac``
+        along it. ``avoid`` is unused now (kept for signature stability).
         """
-        # A point mid-block for an address, or 1.0 for the intersection itself.
+        # A point mid-block for an address, or 1.0 for the far intersection.
         car.dest_frac = self.rng.uniform(0.3, 0.9) if self.edge_points else 1.0
-        if self.demand is not None and avoid is not None:
-            car.dest = self.demand.next_destination(avoid, self.now)
-            return car.dest
-        dest = self.rng.choice(self._dest_nodes)
-        if avoid is not None and len(self._dest_nodes) > 1:
-            while dest == avoid:
-                dest = self.rng.choice(self._dest_nodes)
-        car.dest = dest
-        return dest
+        if self.demand is not None:
+            dest_edge = self.demand.next_destination(car.edge_id, self.now, home=car.home)
+        else:
+            dest_edge = self.rng.choice(self._dest_edges)
+            if len(self._dest_edges) > 1:
+                while dest_edge == car.edge_id:
+                    dest_edge = self.rng.choice(self._dest_edges)
+        car.dest_edge = dest_edge
+        car.dest = self.net.edges[dest_edge].u   # route to the street's upstream node
+        return car.dest
 
     def next_edge(self, edge_id: int, car: Optional[Car] = None) -> Optional[int]:
         """Choose the out-edge at the end of ``edge_id`` that best serves ``car.dest``.
@@ -179,14 +189,20 @@ class ShortestPathRouter:
         if not options:
             return None  # dead-end
 
+        # No destination yet, or we've just driven the whole destination edge
+        # (sail-through, no parking to stop us mid-block): pick a fresh one.
+        if car.dest is None or (car.dest_edge is not None and edge_id == car.dest_edge):
+            self.assign_destination(car, avoid=node)
+
+        # Reached the destination street's upstream node: take that exact street
+        # (the final hop), even if it would be a U-turn — that's the address.
+        if car.dest_edge is not None and node == car.dest:
+            return car.dest_edge
+
         # Forbid U-turns: drop the edge that leads straight back to where we came
         # from, unless it is the only option (a true dead-end).
         forward = [eid for eid in options if self.net.edges[eid].v != edge.u]
         candidates = forward or list(options)
-
-        # No destination yet, or we've just arrived at it: pick a fresh one.
-        if car.dest is None or car.dest == node:
-            self.assign_destination(car, avoid=node)
 
         dist = self._dist_to(car.dest)
         best, best_cost = None, math.inf
