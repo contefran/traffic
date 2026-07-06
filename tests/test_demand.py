@@ -17,19 +17,20 @@ def _model(seed=0):
 
 
 def test_period_splits_the_day_into_four():
+    # Day starts at midnight: Night, Morning, Midday, Evening (day_length=400).
     _, _, m = _model()
-    assert m.period(0.0) is Period.MORNING       # 0.00
-    assert m.period(150.0) is Period.MIDDAY       # 0.375
-    assert m.period(250.0) is Period.EVENING      # 0.625
-    assert m.period(350.0) is Period.NIGHT        # 0.875
-    assert m.period(400.0) is Period.MORNING      # wraps around
+    assert m.period(0.0) is Period.NIGHT          # 0.00  (midnight)
+    assert m.period(150.0) is Period.MORNING      # 0.375 (~09:00)
+    assert m.period(250.0) is Period.MIDDAY       # 0.625 (~15:00)
+    assert m.period(350.0) is Period.EVENING      # 0.875 (~21:00)
+    assert m.period(400.0) is Period.NIGHT        # wraps around to midnight
 
 
 def test_morning_sends_residents_to_work():
     net, zones, m = _model()
     by = nodes_by_zone(zones)
     home = by[LandUse.RESIDENTIAL][0]
-    dests = [zones[m.next_destination(home, t=10.0)] for _ in range(400)]  # morning
+    dests = [zones[m.next_destination(home, t=150.0)] for _ in range(400)]  # morning ~09:00
     counts = Counter(dests)
     # The clear plurality of morning trips from home go to the office.
     assert counts[LandUse.OFFICE] > counts[LandUse.RESIDENTIAL]
@@ -40,7 +41,7 @@ def test_evening_sends_workers_home():
     net, zones, m = _model()
     by = nodes_by_zone(zones)
     work = by[LandUse.OFFICE][0]
-    dests = [zones[m.next_destination(work, t=260.0)] for _ in range(400)]  # evening
+    dests = [zones[m.next_destination(work, t=350.0)] for _ in range(400)]  # evening ~21:00
     counts = Counter(dests)
     assert counts[LandUse.RESIDENTIAL] > counts[LandUse.OFFICE]
 

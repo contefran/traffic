@@ -1,11 +1,12 @@
 """Time-of-day travel demand: where trips go, and when.
 
 A :class:`DemandModel` turns the land-use zones (:mod:`traffic_sim.zones`) into
-realistic, *non-stationary* origin→destination flows. A day is split into four
-periods; in each, an origin→destination **zone** matrix says where a trip
-starting in a given zone is likely to end up — home→work in the morning,
-work→home in the evening, errands to retail at midday, home at night. The model
-picks a destination *zone* from that matrix, then a random node in it.
+realistic, *non-stationary* origin→destination flows. A day (starting at
+midnight) is split into four equal periods — Night, Morning, Midday, Evening;
+in each, an origin→destination **zone** matrix says where a trip starting in a
+given zone is likely to end up — home→work in the morning, work→home in the
+evening, errands to retail at midday, home at night. The model picks a
+destination *zone* from that matrix, then a random node in it.
 
 Plugged into :class:`~traffic_sim.routing.ShortestPathRouter` (``demand=``): the
 router still finds the fastest path, the demand model only chooses the endpoint.
@@ -23,12 +24,17 @@ from .zones import LandUse, ZoneMap, nodes_by_zone
 
 
 class Period(Enum):
-    """The four parts of the simulated day, each with its own travel pattern."""
+    """The four parts of the simulated day, each with its own travel pattern.
 
-    MORNING = "morning"   # home -> work
-    MIDDAY = "midday"     # errands, retail
-    EVENING = "evening"   # work -> home
-    NIGHT = "night"       # home, quiet
+    Chronologically, the day runs **NIGHT → MORNING → MIDDAY → EVENING** starting
+    at midnight (see :meth:`DemandModel.period`); the members are declared in
+    trip-pattern order below for readability, not clock order.
+    """
+
+    MORNING = "morning"   # home -> work   (06:00-12:00 rush)
+    MIDDAY = "midday"     # errands, retail (12:00-18:00)
+    EVENING = "evening"   # work -> home   (18:00-24:00 rush)
+    NIGHT = "night"       # home, quiet    (00:00-06:00)
 
 
 # Origin→destination zone weights per period. ``None`` is the fallback applied to
@@ -68,15 +74,21 @@ class DemandModel:
         self.od = od if od is not None else DEFAULT_OD
 
     def period(self, t: float) -> Period:
-        """Which :class:`Period` the time ``t`` falls in (day wraps around)."""
+        """Which :class:`Period` the time ``t`` falls in (day wraps around).
+
+        The day **starts at midnight**, so the quarters run Night (00:00–06:00),
+        Morning (06:00–12:00, the home→work rush), Midday (12:00–18:00), Evening
+        (18:00–24:00, the work→home rush) — matching the wall clock shown in the
+        live animation.
+        """
         frac = (t % self.day_length) / self.day_length
         if frac < 0.25:
-            return Period.MORNING
+            return Period.NIGHT
         if frac < 0.5:
-            return Period.MIDDAY
+            return Period.MORNING
         if frac < 0.75:
-            return Period.EVENING
-        return Period.NIGHT
+            return Period.MIDDAY
+        return Period.EVENING
 
     def _weights(self, t: float, origin_zone: LandUse) -> Dict[LandUse, float]:
         """Destination-zone weights for a trip from ``origin_zone`` at time ``t``."""

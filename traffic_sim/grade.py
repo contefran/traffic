@@ -36,6 +36,7 @@ def _link(net: RoadNetwork, u: int, v: int, speed: float, lanes: int,
 
 def _two_way(net: RoadNetwork, u: int, v: int, speed: float, lanes: int,
              length=None) -> None:
+    """Append both directed edges ``u <-> v`` (a bidirectional link)."""
     _link(net, u, v, speed, lanes, length)
     _link(net, v, u, speed, lanes, length)
 

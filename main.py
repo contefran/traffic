@@ -128,10 +128,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = p.add_argument_group("run / output")
     run.add_argument("--dt", type=float, default=0.1, help="time step [s]")
-    run.add_argument("--steps", type=int, default=800, help="number of steps")
+    run.add_argument("--steps", type=int, default=None,
+                     help="number of steps (default: one full day = day-length / dt, "
+                          "so the run goes midnight -> midnight)")
     run.add_argument("--save-gif", metavar="PATH", default=None,
                      help="render headless to this GIF instead of a live window")
-    run.add_argument("--fps", type=int, default=20, help="GIF frame rate")
+    run.add_argument("--fps", type=int, default=30,
+                     help="target frame rate for the live window and the GIF")
+    run.add_argument("--steps-per-frame", type=int, default=1,
+                     help="advance N sim steps per rendered frame (Nx faster "
+                          "playback; higher = choppier motion)")
     run.add_argument("--no-show-signals", dest="show_signals", action="store_false",
                      help="hide the traffic-light markers (declutters big maps; "
                           "signals still operate)")
@@ -200,18 +206,24 @@ def build_simulation(args):
 def main(argv=None) -> None:
     """Parse arguments, build the simulation, run it, and report metrics."""
     args = build_parser().parse_args(argv)
+    # Default the run to exactly one day so the clock goes midnight -> midnight.
+    if args.steps is None:
+        args.steps = max(1, round(args.day_length / args.dt))
     net, sim, zones = build_simulation(args)
-    print(f"nodes={len(net.nodes)} edges={len(net.edges)} cars={args.cars}")
+    print(f"nodes={len(net.nodes)} edges={len(net.edges)} cars={args.cars} "
+          f"steps={args.steps} (day={args.day_length:.0f}s)")
 
     visuals = Visuals()
     if args.save_gif:
         visuals.save_animation(net, sim, args.save_gif,
                                dt=args.dt, steps=args.steps, fps=args.fps, zones=zones,
-                               show_signals=args.show_signals)
+                               show_signals=args.show_signals, day_length=args.day_length,
+                               steps_per_frame=args.steps_per_frame)
         print(f"saved animation to {args.save_gif}")
     else:
         visuals.animate_sim(net, sim, dt=args.dt, steps=args.steps, zones=zones,
-                            show_signals=args.show_signals)
+                            show_signals=args.show_signals, day_length=args.day_length,
+                            fps=args.fps, steps_per_frame=args.steps_per_frame)
 
     # Metrics were recorded every step; report them (speed shown in km/h too).
     s = sim.metrics.summary()

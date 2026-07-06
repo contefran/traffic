@@ -40,6 +40,7 @@ class Visuals:
         from .network import LEVEL_OFFSET
 
         def pos(n):
+            """Screen position of node ``n``, offset diagonally by its level."""
             off = n.level * LEVEL_OFFSET
             return n.x + off, n.y + off
 
@@ -132,6 +133,7 @@ class Visuals:
         from matplotlib.lines import Line2D
 
         def square(color, label):
+            """A square legend swatch of ``color`` labelled ``label``."""
             return Line2D([], [], marker="s", linestyle="None", markersize=8,
                           markerfacecolor=color, markeredgecolor="0.3", label=label)
 
@@ -194,7 +196,9 @@ class Visuals:
 
         When ``signals`` is given, a legend keys the four per-junction signal
         squares (see :meth:`_signal_legend`); ``bbox_inches="tight"`` keeps it in
-        the saved image.
+        the saved image. Pass ``zones`` (a ``{node_id: LandUse}`` map) to colour
+        the nodes by land use instead of drawing them as plain black dots — both
+        legends then stack on the right.
         """
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net)
@@ -384,18 +388,28 @@ class Visuals:
         ax.set_title("Road network")
         plt.show()
 
-    def _build_animation(self, net, sim, dt, steps, zones=None, show_signals=True):
+    def _build_animation(self, net, sim, dt, steps, zones=None, show_signals=True,
+                         day_length=None, fps=None, steps_per_frame=1):
         """Construct the matplotlib ``FuncAnimation`` that drives the sim.
 
         Sets up the static backdrop (edges, land-use nodes, signal markers), then
-        returns ``(fig, anim)`` where each frame calls ``sim.step(dt)``, moves the
-        car scatter to the new positions, and recolours the signal markers. Shared
-        by :meth:`animate_sim` (live window) and :meth:`save_animation` (GIF),
-        which differ only in how they consume the returned animation. ``zones``
+        returns ``(fig, anim)`` where each frame advances the sim and moves the car
+        scatter / recolours the signals / ticks the clock. Shared by
+        :meth:`animate_sim` (live window) and :meth:`save_animation` (GIF), which
+        differ only in how they consume the returned animation. ``zones``
         (optional ``{node_id: LandUse}``) colours the nodes by land use.
         ``show_signals=False`` hides the traffic-light markers and legend (the
         signals still operate — this only declutters the view, handy on big maps
-        or when assessing zones). Runs for ``steps`` frames.
+        or when assessing zones). ``day_length`` (simulated seconds per day; taken
+        from the demand model when omitted) drives a live **wall-clock** overlay
+        that runs midnight→midnight over one day.
+
+        **Playback speed.** ``fps`` sets the target frame rate (the inter-frame
+        delay is ``1000/fps`` ms; defaults to real-time ``dt``). ``steps_per_frame``
+        advances the sim that many steps between redraws — so the day plays that
+        many times faster (fewer, cheaper renders per simulated second) at the cost
+        of choppier car motion. The sim still runs the full ``steps`` steps; the
+        animation just renders ``steps // steps_per_frame`` frames.
         """
         fig, ax = plt.subplots(figsize=(8.6, 6))
         # Land-use wash first (under the streets), so districts read as soft
@@ -431,49 +445,87 @@ class Visuals:
         car_color = "#1a1a1a" if zones is not None else "tab:blue"
         scat = ax.scatter([], [], s=34, color=car_color, zorder=5)
 
+        # Live wall clock: map sim time onto a midnight→midnight day.
+        if day_length is None:
+            demand = getattr(getattr(sim, "router", None), "demand", None)
+            day_length = getattr(demand, "day_length", None)
+        clock = None
+        if day_length:
+            clock = ax.text(0.015, 0.985, "", transform=ax.transAxes, ha="left",
+                            va="top", fontsize=13, fontweight="bold", zorder=6,
+                            family="monospace",
+                            bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
+
+        def clock_label(t):
+            """``HH:MM  ·  Period`` for sim time ``t`` on the midnight-based day."""
+            frac = (t % day_length) / day_length
+            minutes = int(round(frac * 1440)) % 1440
+            # Quarters match DemandModel.period (Night, Morning, Midday, Evening).
+            name = ("Night", "Morning", "Midday", "Evening")[min(3, int(frac * 4))]
+            return f"{minutes // 60:02d}:{minutes % 60:02d}  ·  {name}"
+
+        def dynamic():
+            """The blit artists that change each frame (skip the absent ones)."""
+            return tuple(a for a in (scat, sig_scat, clock) if a is not None)
+
         def init():
-            """Blit initialiser: start with an empty car scatter."""
+            """Blit initialiser: empty car scatter, clock at the start of the day."""
             scat.set_offsets(np.empty((0, 2)))
-            return (scat, sig_scat) if sig_scat else (scat,)
+            if clock is not None:
+                clock.set_text(clock_label(sim.t))
+            return dynamic()
 
         def update(frame):
-            """Advance the sim one step and redraw cars (and signal colours)."""
-            sim.step(dt)
+            """Advance the sim ``steps_per_frame`` steps and redraw cars/signals/clock."""
+            for _ in range(steps_per_frame):
+                sim.step(dt)
             points = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in sim.cars]
             scat.set_offsets(np.array(points) if points else np.empty((0, 2)))
             if sig_scat is not None:
                 sig_scat.set_color(self._signal_colors(signals, sim.t, specs))
-                return (scat, sig_scat)
-            return (scat,)
+            if clock is not None:
+                clock.set_text(clock_label(sim.t))
+            return dynamic()
 
-        anim = FuncAnimation(fig, update, frames=steps, init_func=init,
-                             interval=dt * 1000, blit=True, repeat=False)
+        interval = 1000.0 / fps if fps else dt * 1000
+        n_frames = max(1, steps // max(1, steps_per_frame))
+        anim = FuncAnimation(fig, update, frames=n_frames, init_func=init,
+                             interval=interval, blit=True, repeat=False)
         return fig, anim
 
     def animate_sim(self, net, sim, dt: float = 0.1, steps: int = 400, zones=None,
-                    show_signals: bool = True):
+                    show_signals: bool = True, day_length=None, fps: int = 30,
+                    steps_per_frame: int = 1):
         """Open a live animation window (signal colours update each frame).
 
         Pass ``zones`` (a ``{node_id: LandUse}`` map) to colour the nodes by land
         use so the chosen zoning is visible under the traffic. ``show_signals=False``
         hides the traffic-light markers to declutter big maps (signals still run).
+        ``day_length`` drives the live wall-clock overlay. ``fps`` sets the target
+        frame rate and ``steps_per_frame`` plays the day that many times faster
+        (see :meth:`_build_animation`).
         """
         _, anim = self._build_animation(net, sim, dt, steps, zones=zones,
-                                        show_signals=show_signals)
+                                        show_signals=show_signals, day_length=day_length,
+                                        fps=fps, steps_per_frame=steps_per_frame)
         plt.show()
         return anim
 
     def save_animation(self, net, sim, path: str, dt: float = 0.1, steps: int = 400,
-                       fps: int = 20, zones=None, show_signals: bool = True):
+                       fps: int = 20, zones=None, show_signals: bool = True,
+                       day_length=None, steps_per_frame: int = 1):
         """Render the simulation to a GIF at ``path`` (headless, no window).
 
         ``zones`` optionally colours the nodes by land use (see :meth:`animate_sim`);
-        ``show_signals=False`` hides the traffic-light markers.
+        ``show_signals=False`` hides the traffic-light markers; ``day_length`` drives
+        the wall-clock overlay; ``fps`` is the GIF frame rate and ``steps_per_frame``
+        compresses the day (fewer frames).
         """
         from matplotlib.animation import PillowWriter
 
         fig, anim = self._build_animation(net, sim, dt, steps, zones=zones,
-                                          show_signals=show_signals)
+                                          show_signals=show_signals, day_length=day_length,
+                                          fps=fps, steps_per_frame=steps_per_frame)
         anim.save(path, writer=PillowWriter(fps=fps))
         plt.close(fig)
         return path
