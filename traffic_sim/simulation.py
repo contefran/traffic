@@ -245,14 +245,17 @@ class TrafficSim:
         # destinations for the current moment (a no-op for time-agnostic routers).
         self.router.now = self.t
 
-        # Wake pass: parked cars whose dwell is over re-enter the flow and pick a
-        # fresh (time-appropriate) destination from where they are parked.
+        # Wake pass: parked cars whose dwell is over re-enter the flow and head to
+        # their next destination — the next leg of their activity plan if a
+        # schedule owns it, otherwise a fresh one from the router.
         if self.parking is not None:
             for car in self.cars:
                 if not car.active and self.t >= car.wake_t:
                     car.active = True
                     car.next_edge = None
-                    if hasattr(self.router, "assign_destination"):
+                    if self.schedule is not None and hasattr(self.schedule, "on_wake"):
+                        self.schedule.on_wake(car, self.t)
+                    elif hasattr(self.router, "assign_destination"):
                         self.router.assign_destination(
                             car, avoid=self.net.edges[car.edge_id].v)
 
@@ -304,7 +307,14 @@ class TrafficSim:
                 # The destination point along this final edge (mid-block if
                 # ``dest_frac`` < 1, else the node); the car stops here.
                 stop_pos = edge.length * car.dest_frac if arriving else None
-                if car.next_edge is None and not arriving:
+                if arriving:
+                    # An arriving car does not route onward; clear any stale
+                    # commitment so the park pass (which skips cars with a
+                    # committed next_edge) can actually park it — otherwise a car
+                    # that reached its street with a left-over next_edge never
+                    # parks and deadlocks the lane behind it.
+                    car.next_edge = None
+                elif car.next_edge is None:
                     car.next_edge = self.router.next_edge(edge_id, car)
 
                 # Slow down for a turn ahead: cap the desired speed so the car can
@@ -442,8 +452,12 @@ class TrafficSim:
                            else edge.v == car.dest)
                 if (at_dest and car.v <= 0.5 and stop_pos - car.s <= 3.0):
                     car.active = False
-                    if self.schedule is not None and car.edge_id == car.home:
-                        # Home for the night: sleep until the next morning departure.
+                    if self.schedule is not None and hasattr(self.schedule, "on_park"):
+                        # Sleep/dwell until this car's next scheduled activity.
+                        self.schedule.on_park(car, self.t)
+                    elif self.schedule is not None and hasattr(self.schedule, "next_departure") \
+                            and car.edge_id == car.home:
+                        # (legacy DailySchedule) home for the night.
                         car.wake_t = self.schedule.next_departure(car, self.t)
                     else:
                         # Dwell keyed on the street parked on (land use on edges).

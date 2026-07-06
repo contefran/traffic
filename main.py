@@ -29,7 +29,8 @@ from traffic_sim import (
     add_roundabouts,
     DemandModel,
     ParkingModel,
-    DailySchedule,
+    ActivitySchedule,
+    assign_venues,
     MetricsCollector,
     kmh_to_ms,
     ms_to_kmh,
@@ -164,16 +165,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="time-of-day zone-based destinations (else uniform random)")
     demand.add_argument("--parking", action=argparse.BooleanOptionalAction, default=True,
                         help="cars park at destinations and reappear after a dwell")
-    demand.add_argument("--day-length", type=float, default=600.0,
-                        help="simulated seconds in one day (four periods)")
+    demand.add_argument("--day-length", type=float, default=1200.0,
+                        help="simulated seconds in one day (four periods); long "
+                             "enough that a physical commute is a realistic clock fraction")
     demand.add_argument("--residential-speed", action=argparse.BooleanOptionalAction,
                         default=True, help="slow local streets in residential zones to 30 km/h")
     demand.add_argument("--edge-points", action=argparse.BooleanOptionalAction,
                         default=True, help="destinations are mid-block points, not junctions")
     demand.add_argument("--schedule", action=argparse.BooleanOptionalAction, default=True,
-                        help="per-car daily routine: sleep at home, staggered morning departures")
-    demand.add_argument("--night-fraction", type=float, default=0.15,
-                        help="fraction of cars already out on the road at midnight")
+                        help="per-car activity plans (home->work->maybe out->home), "
+                             "computed for the whole day and executed from midnight")
+    demand.add_argument("--work-scale", type=float, default=400.0,
+                        help="Gaussian home->work distance scale [m]: people take "
+                             "jobs near home (smaller = shorter commutes). A key knob "
+                             "for analysis.")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=1000, help="number of cars")
@@ -252,13 +257,16 @@ def build_simulation(args):
               if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
     assign_homes(cars, zones, seed=args.car_seed)   # each car returns to its own house
-    # Per-car daily routine: most cars start asleep at home and depart on a
-    # staggered morning schedule, so the rush builds organically from midnight.
-    schedule = (DailySchedule(day_length=args.day_length, seed=args.car_seed,
-                              night_fraction=args.night_fraction)
-                if args.schedule else None)
-    if schedule is not None:
-        schedule.assign(cars, net)
+    # Activity-based per-car schedules: each car gets a full periodic day (home ->
+    # work -> maybe lunch/gym/dining/pub -> home), computed once and executed from
+    # midnight, so the rush — and the nightlife — emerge from the agents. Venues
+    # (restaurants/gyms/pubs) are a retail-leaning overlay across all zones.
+    schedule = None
+    if args.schedule:
+        venues = assign_venues(net, zones, seed=args.seed)
+        schedule = ActivitySchedule(venues, day_length=args.day_length,
+                                    seed=args.car_seed, work_scale=args.work_scale)
+        schedule.assign(cars, net, zones)
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)
               if args.router == "shortest"

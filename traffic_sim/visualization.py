@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
 
-from .network import DEFAULT_SPEED_LIMIT
+from .network import DEFAULT_SPEED_LIMIT, LEVEL_OFFSET
 
 
 GREEN = "#2ca02c"
@@ -429,8 +429,11 @@ class Visuals:
         self._draw_edges(ax, net)
         min_x, min_y, max_x, max_y = net.bounds()
         ax.set_aspect("equal")
-        ax.set_xlim(min_x - 10, max_x + 10)
-        ax.set_ylim(min_y - 10, max_y + 10)
+        # Pad enough to include the elevated ring, which renders offset by
+        # LEVEL_OFFSET beyond the ground bounds (else the border is clipped).
+        pad = LEVEL_OFFSET + 24
+        ax.set_xlim(min_x - pad, max_x + pad)
+        ax.set_ylim(min_y - pad, max_y + pad)
         ax.axis("off")                     # no ticks / frame — just the city
 
         signals = sim.signals if show_signals else None

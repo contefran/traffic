@@ -26,6 +26,8 @@ from .roundabouts import add_roundabout, add_roundabouts
 from .demand import DemandModel, Period
 from .parking import ParkingModel
 from .schedule import DailySchedule
+from .activities import (ActivitySchedule, ActivityKind, Activity, Venues,
+                         assign_venues)
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
 from .units import kmh_to_ms, ms_to_kmh
 
@@ -59,6 +61,11 @@ __all__ = [
     "Period",
     "ParkingModel",
     "DailySchedule",
+    "ActivitySchedule",
+    "ActivityKind",
+    "Activity",
+    "Venues",
+    "assign_venues",
     "MetricsCollector",
     "StepMetrics",
     "TripMetrics",

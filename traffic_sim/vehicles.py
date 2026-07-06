@@ -71,6 +71,13 @@ class Car:
     # :class:`~traffic_sim.schedule.DailySchedule`. When the car parks at its own
     # home the sim sleeps it until the next occurrence of this time.
     depart_time: float = 0.0
+    # Activity-based scheduling (:mod:`traffic_sim.activities`): ``work`` is the
+    # car's fixed workplace street; ``plan`` is its periodic daily itinerary (a
+    # list of :class:`~traffic_sim.activities.Activity` legs) and ``plan_idx`` the
+    # leg it is currently at / heading to.
+    work: Optional[int] = None
+    plan: Optional[list] = None
+    plan_idx: int = 0
 
     # History of (t, edge_id, s) samples, for debugging / metrics.
     trail: deque = field(default_factory=lambda: deque(maxlen=200))
