@@ -63,6 +63,26 @@ def spawn_cars(net, n_cars: int, seed: int = 0):
     return cars
 
 
+def assign_homes(cars, zones, seed: int = 0):
+    """Give every car a ``home`` (a residential street it returns to).
+
+    Residential streets are dealt out so that **every one gets at least one home**
+    before any is reused: the shuffled list of residential edges is handed to the
+    first cars one-each, and any remaining cars get a random residential street.
+    A no-op when there are no residential streets. Deterministic under ``seed``.
+    """
+    from traffic_sim import LandUse
+
+    residential = [eid for eid, use in zones.items() if use is LandUse.RESIDENTIAL]
+    if not residential:
+        return
+    rng = random.Random(seed)
+    order = residential[:]
+    rng.shuffle(order)
+    for i, car in enumerate(cars):
+        car.home = order[i] if i < len(order) else rng.choice(residential)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser (see module docstring for the big picture)."""
     p = argparse.ArgumentParser(
@@ -176,6 +196,7 @@ def build_simulation(args):
     demand = (DemandModel(net, zones, seed=args.router_seed, day_length=args.day_length)
               if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
+    assign_homes(cars, zones, seed=args.car_seed)   # each car returns to its own house
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)
               if args.router == "shortest"

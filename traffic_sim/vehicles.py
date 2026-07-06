@@ -38,10 +38,20 @@ class Car:
     # destination-aware router reads this to steer toward ``dest`` and assigns
     # a fresh one when the car arrives.
     dest: Optional[int] = None
-    # Where along the final approach edge the destination actually is, as a
-    # fraction in (0, 1]: 1.0 = the intersection itself, <1 = a point mid-block
-    # (an address on the street). Only used with park-and-dwell.
+    # The specific destination **street** (edge id) the car is headed for, when
+    # routing edge-precisely (``dest`` is then that edge's *upstream* node, the
+    # router's target; the car is forced onto ``dest_edge`` for the final hop and
+    # stops ``dest_frac`` along it). ``None`` falls back to node-based arrival
+    # (park on any edge whose ``v == dest``).
+    dest_edge: Optional[int] = None
+    # Where along the destination edge the address actually is, as a fraction in
+    # (0, 1]: 1.0 = the far intersection, <1 = a point mid-block (an address on
+    # the street). Only used with park-and-dwell.
     dest_frac: float = 1.0
+    # The car's home: a residential street (edge id) it returns to whenever a trip
+    # is residential-bound. ``None`` = no fixed home (residential trips then go to
+    # a random residential street).
+    home: Optional[int] = None
 
     # Physical / behavioural parameters (per-car so they can be varied).
     max_speed: float = 50.0       # [m/s] hard cap on desired speed

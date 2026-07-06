@@ -106,16 +106,20 @@ class DemandModel:
                 return zone
         return next(iter(weights))
 
-    def next_destination(self, origin: int, t: float) -> int:
+    def next_destination(self, origin: int, t: float,
+                         home: Optional[int] = None) -> int:
         """A destination **edge** for a trip leaving ``origin`` edge at time ``t``.
 
-        Samples a destination zone from the time-of-day matrix, then a random
-        street (edge) in that zone (never the ``origin`` edge). Falls back to any
-        zoned edge if the chosen zone happens to be empty. The router turns this
-        edge into a routing target (its downstream node) and a mid-block stop.
+        Samples a destination zone from the time-of-day matrix. A **residential**
+        destination returns the car's own ``home`` street (people go to *their*
+        house, not a random one) when one is given; any other zone picks a random
+        street in it (never the ``origin`` edge). Falls back to any zoned edge if
+        the chosen zone happens to be empty.
         """
         origin_zone = self.zones.get(origin, LandUse.OTHER)
         dest_zone = self._pick_zone(self._weights(t, origin_zone))
+        if dest_zone is LandUse.RESIDENTIAL and home is not None:
+            return home
         candidates = self.by_zone.get(dest_zone) or list(self.zones) or [origin]
         dest = self.rng.choice(candidates)
         if dest == origin and len(candidates) > 1:

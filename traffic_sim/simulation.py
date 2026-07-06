@@ -267,8 +267,13 @@ class TrafficSim:
                 # With parking on, a car that has reached its destination edge
                 # does not route onward — it keeps ``next_edge = None`` so it
                 # stops at the node and is parked in the pass below.
-                arriving = (self.parking is not None and car.dest is not None
-                            and edge.v == car.dest)
+                # Arrived when on the specific destination street (edge-precise),
+                # or — for a manually set node destination without a dest_edge —
+                # on any edge into the destination node (the old behaviour).
+                arriving = (self.parking is not None and (
+                    (car.dest_edge is not None and edge_id == car.dest_edge)
+                    or (car.dest_edge is None and car.dest is not None
+                        and edge.v == car.dest)))
                 # The destination point along this final edge (mid-block if
                 # ``dest_frac`` < 1, else the node); the car stops here.
                 stop_pos = edge.length * car.dest_frac if arriving else None
@@ -390,8 +395,9 @@ class TrafficSim:
                     continue
                 edge = self.net.edges[car.edge_id]
                 stop_pos = edge.length * car.dest_frac      # mid-block if <1
-                if (edge.v == car.dest and car.v <= 0.5
-                        and stop_pos - car.s <= 3.0):
+                at_dest = (car.edge_id == car.dest_edge if car.dest_edge is not None
+                           else edge.v == car.dest)
+                if (at_dest and car.v <= 0.5 and stop_pos - car.s <= 3.0):
                     car.active = False
                     # Dwell keyed on the street parked on (land use lives on edges).
                     car.wake_t = self.t + self.parking.dwell_time(car.edge_id)
