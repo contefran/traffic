@@ -140,13 +140,16 @@ class ShortestPathRouter:
     def assign_destination(self, car: Car, avoid: Optional[int] = None) -> int:
         """Give ``car`` a new destination node (never ``avoid``).
 
-        From the :class:`~traffic_sim.demand.DemandModel` if one is attached
-        (time-of-day, zone-based), otherwise uniform random.
+        With a :class:`~traffic_sim.demand.DemandModel` attached (time-of-day,
+        zone-based) the demand picks a destination **street** from the car's
+        *current* edge; we route to that street's downstream node. Otherwise a
+        uniform-random node is used. Returns the chosen ``car.dest`` node.
         """
         # A point mid-block for an address, or 1.0 for the intersection itself.
         car.dest_frac = self.rng.uniform(0.3, 0.9) if self.edge_points else 1.0
-        if self.demand is not None and avoid is not None:
-            car.dest = self.demand.next_destination(avoid, self.now)
+        if self.demand is not None:
+            dest_edge = self.demand.next_destination(car.edge_id, self.now)
+            car.dest = self.net.edges[dest_edge].v
             return car.dest
         dest = self.rng.choice(self._dest_nodes)
         if avoid is not None and len(self._dest_nodes) > 1:

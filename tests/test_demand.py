@@ -3,7 +3,7 @@
 from collections import Counter
 
 from traffic_sim import (
-    build_city_grid, assign_zones, nodes_by_zone, LandUse,
+    build_city_grid, assign_zones, edges_by_zone, LandUse,
     DemandModel, Period, ShortestPathRouter, Car, TrafficSim,
 )
 
@@ -28,8 +28,8 @@ def test_period_splits_the_day_into_four():
 
 def test_morning_sends_residents_to_work():
     net, zones, m = _model()
-    by = nodes_by_zone(zones)
-    home = by[LandUse.RESIDENTIAL][0]
+    by = edges_by_zone(zones)
+    home = by[LandUse.RESIDENTIAL][0]                  # a residential street
     dests = [zones[m.next_destination(home, t=150.0)] for _ in range(400)]  # morning ~09:00
     counts = Counter(dests)
     # The clear plurality of morning trips from home go to the office.
@@ -39,8 +39,8 @@ def test_morning_sends_residents_to_work():
 
 def test_evening_sends_workers_home():
     net, zones, m = _model()
-    by = nodes_by_zone(zones)
-    work = by[LandUse.OFFICE][0]
+    by = edges_by_zone(zones)
+    work = by[LandUse.OFFICE][0]                       # an office street
     dests = [zones[m.next_destination(work, t=350.0)] for _ in range(400)]  # evening ~21:00
     counts = Counter(dests)
     assert counts[LandUse.RESIDENTIAL] > counts[LandUse.OFFICE]
@@ -61,7 +61,9 @@ def test_router_uses_demand_and_sim_syncs_time():
     sim = TrafficSim(net, cars, router)
     sim.step(0.1)
     assert router.now == 0.0                       # synced to the step's start time
-    # Every routed car has been given a real destination via the demand model.
+    # Every routed car has a real destination *node* (the demand picks a street,
+    # the router targets that street's downstream node).
+    node_ids = {n.id for n in net.nodes}
     for c in cars:
         if c.dest is not None:
-            assert c.dest in zones
+            assert c.dest in node_ids

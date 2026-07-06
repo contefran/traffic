@@ -152,31 +152,38 @@ class Visuals:
                          fontsize=8, title_fontsize=8, framealpha=0.95,
                          borderaxespad=0.0)
 
-    def _draw_zone_nodes(self, ax, net, zones, s: float = 34, *,
-                         alpha: float = 1.0, edge: bool = True, zorder: float = 2):
-        """Scatter nodes coloured by land use and return matching legend handles.
+    def _draw_zone_glow(self, ax, net, zones, *, strength: float = 1.0,
+                        zorder: float = 0.6):
+        """Draw a soft land-use **glow around each street**; return legend handles.
 
-        Shared by the land-use map, static frames and the live demo so the zone
-        colours are identical everywhere. ``zones`` is a ``{node_id: LandUse}``
-        map (only ground nodes are zoned). Defaults draw crisp white-ringed dots
-        (the land-use map); the demo instead passes a large translucent, ring-less,
-        low-``zorder`` **wash** so the districts read as soft colour regions
-        *under* the streets and traffic. Returns the legend handles for the uses
-        present.
+        The glow is a stack of translucent colour bands *wider* than the road and
+        drawn *beneath* it (low ``zorder``), so the street keeps its own colour
+        (black local / blue arterial / brown elevated) and just sits in a coloured
+        halo — the zone reads from the neighbourhood, not by recolouring the road.
+        Two bands (a wide faint outer one + a tighter brighter inner one) fake a
+        blur; ``strength`` scales their opacity. ``zones`` is an
+        ``{edge_id: LandUse}`` map (only ground streets are zoned). Shared by the
+        land-use map, static frames and the live demo for consistent colours.
+        Returns the legend handles for the uses present.
         """
         from .zones import LandUse
         from matplotlib.lines import Line2D
 
         colors = {LandUse.RESIDENTIAL: "#2ca02c", LandUse.OFFICE: "#1f77b4",
                   LandUse.RETAIL: "#ff7f0e", LandUse.OTHER: "#b0b0b0"}
-        ring = dict(edgecolors="white", linewidths=0.5) if edge else {}
-        for use, color in colors.items():
-            pts = [net.nodes[nid] for nid, u in zones.items() if u is use]
-            if pts:
-                ax.scatter([n.x for n in pts], [n.y for n in pts], s=s, color=color,
-                           alpha=alpha, zorder=zorder, **ring)
-        return [Line2D([], [], marker="o", linestyle="None", markersize=8,
-                       markerfacecolor=colors[u], markeredgecolor="white", label=u.value)
+        # (extra line width, opacity) per band — outer halo then inner glow.
+        bands = [(11.0, 0.16 * strength), (6.0, 0.30 * strength)]
+        for e in net.edges:
+            use = zones.get(e.id)
+            if use is None:
+                continue                               # elevated / unzoned edge
+            n1, n2 = net.nodes[e.u], net.nodes[e.v]
+            base = 0.8 + 1.1 * e.lanes
+            for extra, alpha in bands:
+                ax.plot([n1.x, n2.x], [n1.y, n2.y], color=colors[use],
+                        linewidth=base + extra, alpha=alpha,
+                        solid_capstyle="round", zorder=zorder)
+        return [Line2D([], [], color=colors[u], linewidth=6, alpha=0.5, label=u.value)
                 for u in LandUse if any(v is u for v in zones.values())]
 
     def _zone_legend(self, ax, handles):
@@ -196,18 +203,18 @@ class Visuals:
 
         When ``signals`` is given, a legend keys the four per-junction signal
         squares (see :meth:`_signal_legend`); ``bbox_inches="tight"`` keeps it in
-        the saved image. Pass ``zones`` (a ``{node_id: LandUse}`` map) to colour
-        the nodes by land use instead of drawing them as plain black dots — both
-        legends then stack on the right.
+        the saved image. Pass ``zones`` (an ``{edge_id: LandUse}`` map) to wash the
+        streets in their land-use colour under the traffic — both legends then
+        stack on the right.
         """
         fig, ax = plt.subplots(figsize=(6, 6))
-        self._draw_edges(ax, net)
-        if zones is not None:                       # colour nodes by land use
-            zone_handles = self._draw_zone_nodes(ax, net, zones)
-        else:                                        # plain black node dots
+        if zones is not None:                       # land-use glow around the roads
+            zone_handles = self._draw_zone_glow(ax, net, zones)
+        else:
             zone_handles = None
-            ax.scatter([n.x for n in net.nodes], [n.y for n in net.nodes],
-                       color="black", s=6, zorder=2)
+        self._draw_edges(ax, net)
+        ax.scatter([n.x for n in net.nodes], [n.y for n in net.nodes],
+                   color="black", s=6, zorder=2)
         sig_leg = None
         if signals is not None:
             self._draw_signals(ax, net, signals, t)
@@ -218,7 +225,9 @@ class Visuals:
                 ax.add_artist(sig_leg)
         if cars:
             xs, ys = zip(*(net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars))
-            ax.scatter(xs, ys, s=55, color="tab:blue", zorder=5)
+            # Near-black over the coloured land wash (blue would clash with office).
+            ax.scatter(xs, ys, s=55, zorder=5,
+                       color="#1a1a1a" if zones is not None else "tab:blue")
 
         min_x, min_y, max_x, max_y = net.bounds()
         ax.set_aspect("equal")
@@ -230,14 +239,15 @@ class Visuals:
         return path
 
     def render_zones(self, net, zones, path: str = "zones.png", title: str = None):
-        """Render the land-use map: nodes coloured by zone, with a legend.
+        """Render the land-use map: streets coloured by zone, with a legend.
 
-        ``zones`` is a ``{node_id: LandUse}`` map (see :mod:`traffic_sim.zones`).
-        Returns the PNG path.
+        ``zones`` is an ``{edge_id: LandUse}`` map (see :mod:`traffic_sim.zones`).
+        The streets keep their normal styling; a land-use **glow** around each one
+        shows the zoning. Returns the PNG path.
         """
         fig, ax = plt.subplots(figsize=(7, 6))
+        handles = self._draw_zone_glow(ax, net, zones, strength=1.4)
         self._draw_edges(ax, net)
-        handles = self._draw_zone_nodes(ax, net, zones, s=45)
         ax.legend(handles=handles, title="land use", loc="upper left",
                   bbox_to_anchor=(1.02, 1.0), fontsize=9, borderaxespad=0.0)
         min_x, min_y, max_x, max_y = net.bounds()
@@ -412,10 +422,9 @@ class Visuals:
         animation just renders ``steps // steps_per_frame`` frames.
         """
         fig, ax = plt.subplots(figsize=(8.6, 6))
-        # Land-use wash first (under the streets), so districts read as soft
-        # colour regions beneath the traffic rather than dots the cars bury.
-        zone_handles = (self._draw_zone_nodes(ax, net, zones, s=150, alpha=0.5,
-                                              edge=False, zorder=0.6)
+        # Land-use glow first (under the streets), so each street shows a soft
+        # colour halo without recolouring the black road or the traffic.
+        zone_handles = (self._draw_zone_glow(ax, net, zones)
                         if zones is not None else None)
         self._draw_edges(ax, net)
         min_x, min_y, max_x, max_y = net.bounds()

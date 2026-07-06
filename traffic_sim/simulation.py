@@ -393,7 +393,8 @@ class TrafficSim:
                 if (edge.v == car.dest and car.v <= 0.5
                         and stop_pos - car.s <= 3.0):
                     car.active = False
-                    car.wake_t = self.t + self.parking.dwell_time(car.dest)
+                    # Dwell keyed on the street parked on (land use lives on edges).
+                    car.wake_t = self.t + self.parking.dwell_time(car.edge_id)
 
         self.t += dt
 

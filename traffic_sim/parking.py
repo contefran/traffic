@@ -43,11 +43,16 @@ class ParkingModel:
         self.dwell_by_use = dwell if dwell is not None else DEFAULT_DWELL
         self.default_dwell = default_dwell
 
-    def dwell_time(self, node_id: int) -> float:
-        """A dwell duration [s] for a car parking at ``node_id``."""
+    def dwell_time(self, edge_id: int) -> float:
+        """A dwell duration [s] for a car parking on street ``edge_id``.
+
+        The land use of the *street parked on* sets the range (a long day at an
+        office street, a quick stop on a retail one); ``default_dwell`` applies
+        when there is no zone map or the street is unzoned.
+        """
         lo, hi = self.default_dwell
         if self.zones is not None:
-            use = self.zones.get(node_id)
+            use = self.zones.get(edge_id)
             if use in self.dwell_by_use:
                 lo, hi = self.dwell_by_use[use]
         return self.rng.uniform(lo, hi)

@@ -6,7 +6,7 @@ midnight) is split into four equal periods — Night, Morning, Midday, Evening;
 in each, an origin→destination **zone** matrix says where a trip starting in a
 given zone is likely to end up — home→work in the morning, work→home in the
 evening, errands to retail at midday, home at night. The model picks a
-destination *zone* from that matrix, then a random node in it.
+destination *zone* from that matrix, then a random **street (edge)** in it.
 
 Plugged into :class:`~traffic_sim.routing.ShortestPathRouter` (``demand=``): the
 router still finds the fastest path, the demand model only chooses the endpoint.
@@ -20,7 +20,7 @@ import random
 from enum import Enum
 from typing import Dict, Optional
 
-from .zones import LandUse, ZoneMap, nodes_by_zone
+from .zones import LandUse, ZoneMap, edges_by_zone
 
 
 class Period(Enum):
@@ -68,7 +68,7 @@ class DemandModel:
         reproducible destination choices."""
         self.net = net
         self.zones = zones
-        self.by_zone = nodes_by_zone(zones)
+        self.by_zone = edges_by_zone(zones)
         self.rng = random.Random(seed)
         self.day_length = day_length
         self.od = od if od is not None else DEFAULT_OD
@@ -107,15 +107,16 @@ class DemandModel:
         return next(iter(weights))
 
     def next_destination(self, origin: int, t: float) -> int:
-        """A destination node for a trip leaving ``origin`` at time ``t``.
+        """A destination **edge** for a trip leaving ``origin`` edge at time ``t``.
 
         Samples a destination zone from the time-of-day matrix, then a random
-        node in that zone (never ``origin``). Falls back to any node if the chosen
-        zone happens to be empty.
+        street (edge) in that zone (never the ``origin`` edge). Falls back to any
+        zoned edge if the chosen zone happens to be empty. The router turns this
+        edge into a routing target (its downstream node) and a mid-block stop.
         """
         origin_zone = self.zones.get(origin, LandUse.OTHER)
         dest_zone = self._pick_zone(self._weights(t, origin_zone))
-        candidates = self.by_zone.get(dest_zone) or [n.id for n in self.net.nodes]
+        candidates = self.by_zone.get(dest_zone) or list(self.zones) or [origin]
         dest = self.rng.choice(candidates)
         if dest == origin and len(candidates) > 1:
             while dest == origin:
