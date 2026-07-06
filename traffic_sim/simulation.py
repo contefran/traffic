@@ -14,13 +14,19 @@ from typing import Dict, List, Optional, Tuple
 from .network import RoadNetwork
 from .vehicles import Car
 from .routing import RandomRouter
-from .signals import SignalSystem, SignalState
+from .signals import SignalSystem, SignalState, TurnType, turn_type
 from .priority import PriorityModel
 
 # Hard safety buffer kept between a follower and its leader [m].
 LEADER_BUFFER = 0.1
 # IDM free-acceleration exponent (standard value).
 IDM_DELTA = 4.0
+
+# Cars slow to this speed to negotiate a turn (left / right / U) at an
+# intersection; they brake for it comfortably over the approach so they reach the
+# junction at ~this speed, then accelerate away on the exit street. Straight-
+# through movements are unaffected. ~20 km/h.
+TURN_SPEED = 20.0 / 3.6         # [m/s]
 
 # Lane-change model (MOBIL-style): the acceleration gain a change must beat to be
 # worth it, the hardest braking it may impose on the target lane's follower, and
@@ -85,6 +91,21 @@ class TrafficSim:
         self.crashes = 0
         # Only run the lane-change pass if some edge actually has >1 lane.
         self._has_multilane = any(e.lanes > 1 for e in net.edges)
+        # Cache of whether a movement is a turn (static per edge pair), so the
+        # turn-slowdown doesn't recompute headings every step.
+        self._is_turn_cache: Dict[Tuple[int, int], bool] = {}
+
+    def _is_turn(self, from_edge: int, to_edge: int) -> bool:
+        """Whether the ``from_edge -> to_edge`` movement is a turn (not straight).
+
+        Left / right / U count; the result is cached (headings are static).
+        """
+        key = (from_edge, to_edge)
+        cached = self._is_turn_cache.get(key)
+        if cached is None:
+            cached = turn_type(self.net, from_edge, to_edge) is not TurnType.STRAIGHT
+            self._is_turn_cache[key] = cached
+        return cached
 
     def _unsignalized(self, node_id: int) -> bool:
         """True if ``node_id`` has no active signal (so right-of-way applies)."""
@@ -285,6 +306,17 @@ class TrafficSim:
                 stop_pos = edge.length * car.dest_frac if arriving else None
                 if car.next_edge is None and not arriving:
                     car.next_edge = self.router.next_edge(edge_id, car)
+
+                # Slow down for a turn ahead: cap the desired speed so the car can
+                # brake comfortably to ~TURN_SPEED by the intersection, then take
+                # the corner and speed up again on the exit street. The cap is the
+                # kinematic "safe speed" v = sqrt(v_turn^2 + 2*b*dist), which is
+                # high far out (no effect) and falls to TURN_SPEED at the junction.
+                if car.next_edge is not None and self._is_turn(edge_id, car.next_edge):
+                    dist = edge.length - car.s
+                    v_turn_cap = math.sqrt(
+                        TURN_SPEED * TURN_SPEED + 2.0 * car.braking * max(0.0, dist))
+                    v_des = min(v_des, v_turn_cap)
 
                 red = False
                 sig_state = None

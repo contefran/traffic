@@ -32,6 +32,10 @@ def test_no_priority_model_means_no_yield():
     south = _edge(net, net.node_id[(1, 0)], c)  # heading north into centre
     cars = [Car(id=0, edge_id=west, s=10.0, v=8.0),
             Car(id=1, edge_id=south, s=10.0, v=8.0)]
+    # Commit straight-through movements so the turn-approach slowdown doesn't
+    # confound this yield test (it's about right-of-way, not cornering speed).
+    cars[0].next_edge = _edge(net, c, net.node_id[(2, 1)])   # west car continues east
+    cars[1].next_edge = _edge(net, c, net.node_id[(1, 2)])   # south car continues north
     start_edges = {car.id: car.edge_id for car in cars}
     sim = TrafficSim(net, cars, RandomRouter(net, seed=0))
     for _ in range(40):
