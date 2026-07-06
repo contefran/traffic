@@ -510,7 +510,10 @@ class Visuals:
             """Advance the sim ``steps_per_frame`` steps and redraw cars/signals/clock."""
             for _ in range(steps_per_frame):
                 sim.step(dt)
-            scat.set_offsets(_offsets([c for c in sim.cars if c.active]))
+            active = [c for c in sim.cars if c.active]
+            scat.set_offsets(_offsets(active))
+            # Marker size grows with vehicle length, so trucks/buses read big.
+            scat.set_sizes([14.0 + 3.5 * c.length for c in active])
             parked.set_offsets(_offsets([c for c in sim.cars if not c.active]))
             if sig_scat is not None:
                 sig_scat.set_color(self._signal_colors(signals, sim.t, specs))

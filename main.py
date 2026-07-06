@@ -17,6 +17,7 @@ from traffic_sim import (
     Car,
     ShortestPathRouter,
     RandomRouter,
+    assign_vehicle_types,
     TrafficSim,
     ProtectedPhaseController,
     FixedTimeController,
@@ -256,6 +257,7 @@ def build_simulation(args):
     demand = (DemandModel(net, zones, seed=args.router_seed, day_length=args.day_length)
               if args.demand else None)
     cars = spawn_cars(net, args.cars, seed=args.car_seed)
+    assign_vehicle_types(cars, seed=args.car_seed)  # mixed fleet: cars, trucks, buses…
     assign_homes(cars, zones, seed=args.car_seed)   # each car returns to its own house
     # Activity-based per-car schedules: each car gets a full periodic day (home ->
     # work -> maybe lunch/gym/dining/pub -> home), computed once and executed from
