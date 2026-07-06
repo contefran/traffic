@@ -431,6 +431,7 @@ class Visuals:
         ax.set_aspect("equal")
         ax.set_xlim(min_x - 10, max_x + 10)
         ax.set_ylim(min_y - 10, max_y + 10)
+        ax.axis("off")                     # no ticks / frame — just the city
 
         signals = sim.signals if show_signals else None
         sig_scat = None
@@ -445,9 +446,26 @@ class Visuals:
             self._zone_legend(ax, zone_handles)
             if sig_leg is not None:                  # re-pin the evicted signal legend
                 ax.add_artist(sig_leg)
-        if sig_scat is not None or zone_handles:
-            # Reserve room on the right so the legend(s) sit beside the map.
+        if sig_scat is not None or zone_handles or day_length:
+            # Reserve room on the right so the legends and clock sit beside the map.
             fig.subplots_adjust(left=0.06, right=0.66)
+
+        # Live wall clock, in its **own** axes in the top-right margin (outside the
+        # map). A dedicated axes is what makes it survive blitting — an artist
+        # placed outside its parent axes is not redrawn on a blit, so the clock
+        # vanished in the live window; here it blits from its own little axes.
+        if day_length is None:
+            demand = getattr(getattr(sim, "router", None), "demand", None)
+            day_length = getattr(demand, "day_length", None)
+        clock = None
+        if day_length:
+            clock_ax = fig.add_axes([0.67, 0.9, 0.31, 0.07])
+            clock_ax.axis("off")
+            clock = clock_ax.text(0.5, 0.5, "", transform=clock_ax.transAxes,
+                                  ha="center", va="center", fontsize=14,
+                                  fontweight="bold", family="monospace",
+                                  bbox=dict(boxstyle="round", fc="white",
+                                            ec="0.6", alpha=0.9))
 
         # Cars in near-black so they stay salient over the coloured land wash
         # (blue would clash with the office zone). Active cars are semi-transparent
@@ -464,17 +482,6 @@ class Visuals:
             """Screen positions for ``cars`` as an (N, 2) array (empty-safe)."""
             pts = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars]
             return np.array(pts) if pts else np.empty((0, 2))
-
-        # Live wall clock: map sim time onto a midnight→midnight day.
-        if day_length is None:
-            demand = getattr(getattr(sim, "router", None), "demand", None)
-            day_length = getattr(demand, "day_length", None)
-        clock = None
-        if day_length:
-            clock = ax.text(0.015, 0.985, "", transform=ax.transAxes, ha="left",
-                            va="top", fontsize=13, fontweight="bold", zorder=6,
-                            family="monospace",
-                            bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
 
         def clock_label(t):
             """``HH:MM  ·  Period`` for sim time ``t`` on the midnight-based day."""
