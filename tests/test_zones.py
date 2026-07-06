@@ -14,30 +14,32 @@ def test_every_node_gets_a_zone():
     assert all(isinstance(u, LandUse) for u in zones.values())
 
 
-def test_centre_is_office_edges_are_residential():
-    net = build_city_grid(8, 8, 150.0, seed=1)
-    # No retail, so the layout is a clean office core / residential ring.
-    zones = assign_zones(net, seed=0, retail_fraction=0.0)
-    centre = net.node_id[(4, 4)]
-    corner = net.node_id[(0, 0)]
-    assert zones[centre] is LandUse.OFFICE
-    assert zones[corner] is LandUse.RESIDENTIAL
-
-
-def test_retail_fraction_scatters_shops():
-    net = build_city_grid(10, 10, 150.0, seed=2)
-    zones = assign_zones(net, seed=0, retail_fraction=0.3)
+def test_all_land_uses_present_in_polycentric_layout():
+    # The default layout scatters several clusters of each use across the map,
+    # so every land use should appear (no single central CBD).
+    net = build_city_grid(16, 16, 150.0, seed=1)
+    zones = assign_zones(net, seed=0)
     counts = Counter(zones.values())
-    assert counts[LandUse.RETAIL] > 0
-    # Roughly the requested fraction (loose bounds for randomness).
-    frac = counts[LandUse.RETAIL] / len(zones)
-    assert 0.15 < frac < 0.45
+    for use in (LandUse.RESIDENTIAL, LandUse.OFFICE, LandUse.RETAIL):
+        assert counts[use] > 0, f"{use} missing from the layout"
+
+
+def test_sparse_ratio_orders_retail_over_office_over_residential():
+    # With no clusters every non-background node is a scatter, so the counts
+    # directly expose the per-type scatter probabilities: retail > office >
+    # residential (shops are the most ubiquitous, houses the most clustered).
+    net = build_city_grid(20, 20, 150.0, seed=2)
+    zones = assign_zones(net, seed=0, clusters={})
+    counts = Counter(zones.values())
+    assert counts[LandUse.RETAIL] > counts[LandUse.OFFICE] > counts[LandUse.RESIDENTIAL]
+    # Most of the map is undeveloped background when clusters are switched off.
+    assert counts[LandUse.OTHER] > counts[LandUse.RETAIL]
 
 
 def test_apply_zone_speeds_slows_only_residential_local_streets():
-    net = build_city_grid(8, 8, 150.0, seed=1, arterial_every=3,
+    net = build_city_grid(16, 16, 150.0, seed=1, arterial_every=3,
                           arterial_speed=kmh_to_ms(70), arterial_lanes=2)
-    zones = assign_zones(net, seed=0, retail_fraction=0.0)
+    zones = assign_zones(net, seed=0)
     before = {e.id: e.speed_limit for e in net.edges}
     apply_zone_speeds(net, zones)
 

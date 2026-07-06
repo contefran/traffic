@@ -144,14 +144,52 @@ class Visuals:
             square(YELLOW, "amber  =  clearing (stop if you can)"),
             square(RED, "red  =  stop"),
         ]
-        ax.legend(handles=handles,
-                  title="Signal squares\n(4 per junction, 1 green at a time)",
-                  loc="upper left", bbox_to_anchor=(1.02, 1.0),
-                  fontsize=8, title_fontsize=8, framealpha=0.95,
-                  borderaxespad=0.0)
+        return ax.legend(handles=handles,
+                         title="Signal squares\n(4 per junction, 1 green at a time)",
+                         loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                         fontsize=8, title_fontsize=8, framealpha=0.95,
+                         borderaxespad=0.0)
+
+    def _draw_zone_nodes(self, ax, net, zones, s: float = 34, *,
+                         alpha: float = 1.0, edge: bool = True, zorder: float = 2):
+        """Scatter nodes coloured by land use and return matching legend handles.
+
+        Shared by the land-use map, static frames and the live demo so the zone
+        colours are identical everywhere. ``zones`` is a ``{node_id: LandUse}``
+        map (only ground nodes are zoned). Defaults draw crisp white-ringed dots
+        (the land-use map); the demo instead passes a large translucent, ring-less,
+        low-``zorder`` **wash** so the districts read as soft colour regions
+        *under* the streets and traffic. Returns the legend handles for the uses
+        present.
+        """
+        from .zones import LandUse
+        from matplotlib.lines import Line2D
+
+        colors = {LandUse.RESIDENTIAL: "#2ca02c", LandUse.OFFICE: "#1f77b4",
+                  LandUse.RETAIL: "#ff7f0e", LandUse.OTHER: "#b0b0b0"}
+        ring = dict(edgecolors="white", linewidths=0.5) if edge else {}
+        for use, color in colors.items():
+            pts = [net.nodes[nid] for nid, u in zones.items() if u is use]
+            if pts:
+                ax.scatter([n.x for n in pts], [n.y for n in pts], s=s, color=color,
+                           alpha=alpha, zorder=zorder, **ring)
+        return [Line2D([], [], marker="o", linestyle="None", markersize=8,
+                       markerfacecolor=colors[u], markeredgecolor="white", label=u.value)
+                for u in LandUse if any(v is u for v in zones.values())]
+
+    def _zone_legend(self, ax, handles):
+        """Create a 'land use' legend on the right, stacked *below* the signal one.
+
+        Returns the legend; the caller re-pins the signal legend via
+        :meth:`~matplotlib.axes.Axes.add_artist` when both are shown (a second
+        ``ax.legend`` call otherwise evicts the first).
+        """
+        return ax.legend(handles=handles, title="land use", loc="lower left",
+                         bbox_to_anchor=(1.02, 0.0), fontsize=8, title_fontsize=8,
+                         framealpha=0.95, borderaxespad=0.0)
 
     def render_state(self, net, cars=None, t: float = 0.0, signals=None,
-                     path: str = "frame.png", title: str = None):
+                     zones=None, path: str = "frame.png", title: str = None):
         """Render a single headless frame to ``path`` (PNG). Returns the path.
 
         When ``signals`` is given, a legend keys the four per-junction signal
@@ -160,11 +198,20 @@ class Visuals:
         """
         fig, ax = plt.subplots(figsize=(6, 6))
         self._draw_edges(ax, net)
-        ax.scatter([n.x for n in net.nodes], [n.y for n in net.nodes],
-                   color="black", s=6, zorder=2)
+        if zones is not None:                       # colour nodes by land use
+            zone_handles = self._draw_zone_nodes(ax, net, zones)
+        else:                                        # plain black node dots
+            zone_handles = None
+            ax.scatter([n.x for n in net.nodes], [n.y for n in net.nodes],
+                       color="black", s=6, zorder=2)
+        sig_leg = None
         if signals is not None:
             self._draw_signals(ax, net, signals, t)
-            self._signal_legend(ax)
+            sig_leg = self._signal_legend(ax)
+        if zone_handles:
+            self._zone_legend(ax, zone_handles)
+            if sig_leg is not None:                  # re-pin the evicted signal legend
+                ax.add_artist(sig_leg)
         if cars:
             xs, ys = zip(*(net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars))
             ax.scatter(xs, ys, s=55, color="tab:blue", zorder=5)
@@ -184,21 +231,9 @@ class Visuals:
         ``zones`` is a ``{node_id: LandUse}`` map (see :mod:`traffic_sim.zones`).
         Returns the PNG path.
         """
-        from .zones import LandUse
-        from matplotlib.lines import Line2D
-
-        colors = {LandUse.RESIDENTIAL: "#2ca02c", LandUse.OFFICE: "#1f77b4",
-                  LandUse.RETAIL: "#ff7f0e", LandUse.OTHER: "#888888"}
         fig, ax = plt.subplots(figsize=(7, 6))
         self._draw_edges(ax, net)
-        for use, color in colors.items():
-            pts = [net.nodes[nid] for nid, u in zones.items() if u is use]
-            if pts:
-                ax.scatter([n.x for n in pts], [n.y for n in pts], s=45,
-                           color=color, edgecolors="white", linewidths=0.5, zorder=3)
-        handles = [Line2D([], [], marker="o", linestyle="None", markersize=8,
-                          markerfacecolor=colors[u], markeredgecolor="white",
-                          label=u.value) for u in LandUse if any(v is u for v in zones.values())]
+        handles = self._draw_zone_nodes(ax, net, zones, s=45)
         ax.legend(handles=handles, title="land use", loc="upper left",
                   bbox_to_anchor=(1.02, 1.0), fontsize=9, borderaxespad=0.0)
         min_x, min_y, max_x, max_y = net.bounds()
@@ -349,35 +384,52 @@ class Visuals:
         ax.set_title("Road network")
         plt.show()
 
-    def _build_animation(self, net, sim, dt, steps):
+    def _build_animation(self, net, sim, dt, steps, zones=None, show_signals=True):
         """Construct the matplotlib ``FuncAnimation`` that drives the sim.
 
-        Sets up the static backdrop (edges, signal markers), then returns
-        ``(fig, anim)`` where each frame calls ``sim.step(dt)``, moves the car
-        scatter to the new positions, and recolours the signal markers. Shared by
-        :meth:`animate_sim` (live window) and :meth:`save_animation` (GIF), which
-        differ only in how they consume the returned animation. Runs for
-        ``steps`` frames.
+        Sets up the static backdrop (edges, land-use nodes, signal markers), then
+        returns ``(fig, anim)`` where each frame calls ``sim.step(dt)``, moves the
+        car scatter to the new positions, and recolours the signal markers. Shared
+        by :meth:`animate_sim` (live window) and :meth:`save_animation` (GIF),
+        which differ only in how they consume the returned animation. ``zones``
+        (optional ``{node_id: LandUse}``) colours the nodes by land use.
+        ``show_signals=False`` hides the traffic-light markers and legend (the
+        signals still operate — this only declutters the view, handy on big maps
+        or when assessing zones). Runs for ``steps`` frames.
         """
         fig, ax = plt.subplots(figsize=(8.6, 6))
+        # Land-use wash first (under the streets), so districts read as soft
+        # colour regions beneath the traffic rather than dots the cars bury.
+        zone_handles = (self._draw_zone_nodes(ax, net, zones, s=150, alpha=0.5,
+                                              edge=False, zorder=0.6)
+                        if zones is not None else None)
         self._draw_edges(ax, net)
         min_x, min_y, max_x, max_y = net.bounds()
         ax.set_aspect("equal")
         ax.set_xlim(min_x - 10, max_x + 10)
         ax.set_ylim(min_y - 10, max_y + 10)
 
-        signals = sim.signals
+        signals = sim.signals if show_signals else None
         sig_scat = None
+        sig_leg = None
         if signals is not None:
             positions, specs = self._signal_specs(net, signals)
             if positions:
                 pos = np.array(positions)
                 sig_scat = ax.scatter(pos[:, 0], pos[:, 1], s=16, marker="s", zorder=4)
-                self._signal_legend(ax)
-                # Reserve room on the right so the legend sits beside the map.
-                fig.subplots_adjust(left=0.06, right=0.66)
+                sig_leg = self._signal_legend(ax)
+        if zone_handles:
+            self._zone_legend(ax, zone_handles)
+            if sig_leg is not None:                  # re-pin the evicted signal legend
+                ax.add_artist(sig_leg)
+        if sig_scat is not None or zone_handles:
+            # Reserve room on the right so the legend(s) sit beside the map.
+            fig.subplots_adjust(left=0.06, right=0.66)
 
-        scat = ax.scatter([], [], s=40, color="tab:blue", zorder=5)
+        # Cars in near-black so they stay salient over the coloured land wash
+        # (blue would clash with the office zone).
+        car_color = "#1a1a1a" if zones is not None else "tab:blue"
+        scat = ax.scatter([], [], s=34, color=car_color, zorder=5)
 
         def init():
             """Blit initialiser: start with an empty car scatter."""
@@ -398,17 +450,30 @@ class Visuals:
                              interval=dt * 1000, blit=True, repeat=False)
         return fig, anim
 
-    def animate_sim(self, net, sim, dt: float = 0.1, steps: int = 400):
-        """Open a live animation window (signal colours update each frame)."""
-        _, anim = self._build_animation(net, sim, dt, steps)
+    def animate_sim(self, net, sim, dt: float = 0.1, steps: int = 400, zones=None,
+                    show_signals: bool = True):
+        """Open a live animation window (signal colours update each frame).
+
+        Pass ``zones`` (a ``{node_id: LandUse}`` map) to colour the nodes by land
+        use so the chosen zoning is visible under the traffic. ``show_signals=False``
+        hides the traffic-light markers to declutter big maps (signals still run).
+        """
+        _, anim = self._build_animation(net, sim, dt, steps, zones=zones,
+                                        show_signals=show_signals)
         plt.show()
         return anim
 
-    def save_animation(self, net, sim, path: str, dt: float = 0.1, steps: int = 400, fps: int = 20):
-        """Render the simulation to a GIF at ``path`` (headless, no window)."""
+    def save_animation(self, net, sim, path: str, dt: float = 0.1, steps: int = 400,
+                       fps: int = 20, zones=None, show_signals: bool = True):
+        """Render the simulation to a GIF at ``path`` (headless, no window).
+
+        ``zones`` optionally colours the nodes by land use (see :meth:`animate_sim`);
+        ``show_signals=False`` hides the traffic-light markers.
+        """
         from matplotlib.animation import PillowWriter
 
-        fig, anim = self._build_animation(net, sim, dt, steps)
+        fig, anim = self._build_animation(net, sim, dt, steps, zones=zones,
+                                          show_signals=show_signals)
         anim.save(path, writer=PillowWriter(fps=fps))
         plt.close(fig)
         return path

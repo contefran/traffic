@@ -132,16 +132,20 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--save-gif", metavar="PATH", default=None,
                      help="render headless to this GIF instead of a live window")
     run.add_argument("--fps", type=int, default=20, help="GIF frame rate")
+    run.add_argument("--no-show-signals", dest="show_signals", action="store_false",
+                     help="hide the traffic-light markers (declutters big maps; "
+                          "signals still operate)")
 
     return p
 
 
 def build_simulation(args):
-    """Assemble ``(net, sim)`` from parsed ``args``.
+    """Assemble ``(net, sim, zones)`` from parsed ``args``.
 
     Speeds in ``args`` are km/h and are converted to SI here (the only place the
     boundary conversion happens). A :class:`MetricsCollector` is always attached
-    so the run reports its flow statistics.
+    so the run reports its flow statistics. The land-use ``zones`` map is returned
+    alongside so the visualiser can colour the demo by zone.
     """
     net = build_city_grid(
         width=args.width, height=args.height, block=args.block,
@@ -190,22 +194,24 @@ def build_simulation(args):
     metrics = MetricsCollector()
     sim = TrafficSim(net, cars, router, signals=signals, priority=priority,
                      left_turn=left_turn, parking=parking, metrics=metrics)
-    return net, sim
+    return net, sim, zones
 
 
 def main(argv=None) -> None:
     """Parse arguments, build the simulation, run it, and report metrics."""
     args = build_parser().parse_args(argv)
-    net, sim = build_simulation(args)
+    net, sim, zones = build_simulation(args)
     print(f"nodes={len(net.nodes)} edges={len(net.edges)} cars={args.cars}")
 
     visuals = Visuals()
     if args.save_gif:
         visuals.save_animation(net, sim, args.save_gif,
-                               dt=args.dt, steps=args.steps, fps=args.fps)
+                               dt=args.dt, steps=args.steps, fps=args.fps, zones=zones,
+                               show_signals=args.show_signals)
         print(f"saved animation to {args.save_gif}")
     else:
-        visuals.animate_sim(net, sim, dt=args.dt, steps=args.steps)
+        visuals.animate_sim(net, sim, dt=args.dt, steps=args.steps, zones=zones,
+                            show_signals=args.show_signals)
 
     # Metrics were recorded every step; report them (speed shown in km/h too).
     s = sim.metrics.summary()

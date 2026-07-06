@@ -8,9 +8,11 @@ from traffic_sim import (
 )
 
 
-def _model(retail=0.0, seed=0):
-    net = build_city_grid(8, 8, 150.0, seed=1)
-    zones = assign_zones(net, seed=0, retail_fraction=retail)
+def _model(seed=0):
+    # 16x16 so the polycentric clusters (radius scales with the grid) actually
+    # form; on a tiny grid the districts collapse to single nodes.
+    net = build_city_grid(16, 16, 150.0, seed=1)
+    zones = assign_zones(net, seed=0)
     return net, zones, DemandModel(net, zones, seed=seed, day_length=400.0)
 
 
@@ -50,8 +52,8 @@ def test_never_returns_the_origin():
 
 
 def test_router_uses_demand_and_sim_syncs_time():
-    net = build_city_grid(6, 6, 150.0, seed=1)
-    zones = assign_zones(net, seed=0, retail_fraction=0.0)
+    net = build_city_grid(16, 16, 150.0, seed=1)
+    zones = assign_zones(net, seed=0)
     demand = DemandModel(net, zones, seed=0, day_length=400.0)
     router = ShortestPathRouter(net, seed=0, demand=demand)
     cars = [Car(id=k, edge_id=k % len(net.edges), s=0.0, v=0.0) for k in range(8)]
