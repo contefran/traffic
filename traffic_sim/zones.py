@@ -121,6 +121,8 @@ def assign_zones(net, *, seed: int = 0,
         n1, n2 = net.nodes[e.u], net.nodes[e.v]
         if n1.level != 0 or n2.level != 0:
             continue                            # skip elevated / ramp edges
+        if n1.internal or n2.internal:
+            continue                            # skip roundabout ring / island
         key = (min(e.u, e.v), max(e.u, e.v))
         if key not in pair_use:                 # first direction seen: decide once
             pair_use[key] = classify((n1.i + n2.i) / 2.0, (n1.j + n2.j) / 2.0)

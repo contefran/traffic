@@ -26,6 +26,7 @@ from traffic_sim import (
     assign_zones,
     apply_zone_speeds,
     add_grade_separated,
+    add_roundabouts,
     DemandModel,
     ParkingModel,
     DailySchedule,
@@ -34,6 +35,7 @@ from traffic_sim import (
     ms_to_kmh,
     Visuals,
 )
+from traffic_sim.network import DEFAULT_SPEED_LIMIT
 
 
 def spawn_cars(net, n_cars: int, seed: int = 0):
@@ -84,6 +86,43 @@ def assign_homes(cars, zones, seed: int = 0):
         car.home = order[i] if i < len(order) else rng.choice(residential)
 
 
+def pick_roundabout_nodes(net, count: int, seed: int = 0):
+    """Choose ``count`` interior local crossings to turn into roundabouts.
+
+    Prefers busy **ground** intersections (≥3 in- and out-edges) that are away
+    from the border and touch no arterial (roundabouts sit on local street
+    crossings here, not on fast through-roads), and spaces them out so no two are
+    grid-adjacent. Deterministic under ``seed``.
+    """
+    width = max(n.i for n in net.nodes) + 1
+    height = max(n.j for n in net.nodes) + 1
+
+    def local_crossing(n):
+        """A busy interior ground junction of local streets (no arterials)."""
+        if n.level != 0 or n.internal:
+            return False
+        if not (0 < n.i < width - 1 and 0 < n.j < height - 1):
+            return False
+        if len(n.in_edges) < 3 or len(n.out_edges) < 3:
+            return False
+        incident = n.in_edges + n.out_edges
+        return all(net.edges[e].speed_limit <= DEFAULT_SPEED_LIMIT + 1e-6
+                   for e in incident)
+
+    candidates = [n for n in net.nodes if local_crossing(n)]
+    rng = random.Random(seed)
+    rng.shuffle(candidates)
+    chosen, used = [], []
+    for n in candidates:
+        if len(chosen) >= count:
+            break
+        if any(abs(n.i - m.i) + abs(n.j - m.j) <= 2 for m in used):
+            continue                    # keep roundabouts spread apart
+        chosen.append(n.id)
+        used.append(n)
+    return chosen
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser (see module docstring for the big picture)."""
     p = argparse.ArgumentParser(
@@ -116,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="metres between ring on/off ramps (>=1 per side)")
     net.add_argument("--grade", action=argparse.BooleanOptionalAction, default=True,
                      help="elevate the ring + a cross-city expressway (grade-separated)")
+    net.add_argument("--roundabouts", type=int, default=6,
+                     help="number of local crossings to build as geometric roundabouts")
 
     demand = p.add_argument_group("demand & land use")
     demand.add_argument("--demand", action=argparse.BooleanOptionalAction, default=True,
@@ -193,6 +234,14 @@ def build_simulation(args):
         add_grade_separated(net, block=args.block, speed=kmh_to_ms(args.ring_speed),
                             lanes=args.ring_lanes, access_spacing=args.ring_access_spacing)
 
+    # Geometric roundabouts on some local crossings (before zoning, so their ring
+    # edges stay unzoned). Ring nodes are unsignalized and circulating traffic has
+    # right-of-way (both wired below).
+    ring_nodes, circulating = set(), set()
+    if args.roundabouts > 0:
+        centres = pick_roundabout_nodes(net, args.roundabouts, seed=args.seed)
+        ring_nodes, circulating = add_roundabouts(net, centres)
+
     # Land use drives demand, dwell times, and (optionally) residential speeds.
     zones = assign_zones(net, seed=args.seed)
     if args.residential_speed:
@@ -220,14 +269,16 @@ def build_simulation(args):
     # and lower-priority traffic yields to merge (the priority model gives the
     # faster road right of way). Grade separation unsignalizes the whole elevated
     # level; the 2-D ring unsignalizes the perimeter.
-    unsig = None
+    unsig = set()
     if args.grade:
-        unsig = {n.id for n in net.nodes if n.level == 1}
+        unsig |= {n.id for n in net.nodes if n.level == 1}
     elif args.ring:
-        unsig = {n.id for n in net.nodes
-                 if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
-    signals = SignalSystem(net, controller, unsignalized_nodes=unsig)
-    priority = PriorityModel(net) if args.priority else None
+        unsig |= {n.id for n in net.nodes
+                  if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
+    unsig |= ring_nodes          # roundabout ring nodes are never signalized
+    signals = SignalSystem(net, controller, unsignalized_nodes=unsig or None)
+    # Priority gives circulating roundabout traffic right-of-way over entries.
+    priority = PriorityModel(net, circulating=circulating) if args.priority else None
     left_turn = PermissiveLeftModel(net)   # inert under protected phasing
     parking = ParkingModel(seed=args.car_seed, zones=zones) if args.parking else None
     metrics = MetricsCollector()

@@ -43,6 +43,10 @@ class Node:
     x: float
     y: float
     level: int = 0  # 0 = ground, 1 = elevated
+    # An *internal* node is part of a junction's machinery (a roundabout ring
+    # node, or the disconnected island at its centre) rather than a place: it is
+    # never zoned, never a trip destination, and nobody parks there.
+    internal: bool = False
     out_edges: List[int] = field(default_factory=list)
     in_edges: List[int] = field(default_factory=list)
 

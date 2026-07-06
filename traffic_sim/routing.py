@@ -92,13 +92,17 @@ class ShortestPathRouter:
         # along the final edge) rather than the intersection itself.
         self.edge_points = edge_points
         self.now = 0.0   # current sim time, refreshed by TrafficSim each step
-        # Valid destinations are ground nodes only (nobody parks on an elevated
-        # highway). Falls back to all nodes if levels aren't used.
-        self._dest_nodes = [nd.id for nd in net.nodes if nd.level == 0] or \
+        # Valid destinations are ground, non-internal nodes only (nobody parks on
+        # an elevated highway or a roundabout ring). Falls back to all nodes if
+        # neither levels nor roundabouts are used.
+        def _place_node(nd):
+            """A real destination: on the ground and not an internal junction node."""
+            return nd.level == 0 and not nd.internal
+        self._dest_nodes = [nd.id for nd in net.nodes if _place_node(nd)] or \
             list(range(len(net.nodes)))
-        # Ground streets, for uniform-random edge destinations (no demand model).
+        # Ground streets (not ring edges), for uniform-random edge destinations.
         self._dest_edges = [e.id for e in net.edges
-                            if net.nodes[e.u].level == 0 and net.nodes[e.v].level == 0] or \
+                            if _place_node(net.nodes[e.u]) and _place_node(net.nodes[e.v])] or \
             [e.id for e in net.edges]
         # dest node id -> {node id: free-flow cost to reach dest}
         self._dist_cache: Dict[int, Dict[int, float]] = {}
