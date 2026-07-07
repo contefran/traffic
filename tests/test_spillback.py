@@ -105,3 +105,22 @@ def test_parked_car_waits_for_a_kerbside_gap_to_unpark():
     blocker.s = 70.0                        # queue clears
     sim.step(0.1)
     assert parked.active, "gap opened — pulls out"
+
+
+def test_parked_car_waits_for_a_speed_safe_gap_not_just_a_static_one():
+    # A car approaching fast from behind may be many car-lengths away yet unable
+    # to stop: the parked car must wait for a gap sized to the follower's *speed*
+    # (o.v^2 / 2b), not just a static car length. Pulling out ~10 m ahead of a
+    # 14 m/s car was the dominant residual-crash mechanism.
+    net = build_grid_network(width=3, height=3, block=200.0)
+    parked = Car(id=0, edge_id=0, s=100.0, v=0.0, active=False, wake_t=0.0)
+    faster = Car(id=1, edge_id=0, s=88.0, v=14.0, lane=0)   # 7.5 m behind at 14 m/s
+    sim = TrafficSim(net, [parked, faster], RandomRouter(net, seed=0),
+                     parking=ParkingModel(seed=0))
+    sim.step(0.1)
+    assert not parked.active, "must not pull out in front of fast approaching traffic"
+    assert sim.crashes == 0
+
+    faster.v = 1.0                          # now crawling: a 7.5 m gap is plenty
+    sim.step(0.1)
+    assert parked.active, "slow follower far enough back — safe to pull out"
