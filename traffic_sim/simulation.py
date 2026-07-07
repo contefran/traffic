@@ -128,18 +128,26 @@ class TrafficSim:
     def _can_unpark(car: Car, lane_cars: List[Car]) -> bool:
         """Whether a parked ``car`` can pull out into its lane right now.
 
-        Requires a standstill gap both ahead (to its would-be leader) and behind
-        (so the would-be follower isn't suddenly inside its own gap) among
-        ``lane_cars``, the active cars on the same (edge, lane). The margins use
-        the cars' own ``s0``, so cautious traffic (bigger gaps) is genuinely
-        harder to pull out into. Waking never injects an overlap this way.
+        Ahead, it needs a plain standstill gap to its would-be leader. Behind,
+        it needs a **speed-aware** gap: an approaching follower must be far
+        enough to brake for the emerging car within its own *comfortable*
+        deceleration (``o.v²/2·braking`` plus a standstill margin ``s0``) — a
+        real driver waits for a gap sized to oncoming *speed* before leaving a
+        parking spot, not just a static car length. A purely static gap let a
+        car pull out ~10 m in front of traffic doing 50 km/h, which then could
+        not stop in time — the dominant residual-crash mechanism. Cautious /
+        faster followers therefore demand a bigger gap; the parked car simply
+        retries next step, pulling out the moment a safe gap opens.
         """
         for o in lane_cars:
-            if o.s >= car.s:                        # would be car's leader
+            if o.s >= car.s:                        # would be car's leader ahead
                 if o.s - car.s < car.length + car.s0:
                     return False
-            elif car.s - o.s < o.length + o.s0:     # would be car's follower
-                return False
+            else:                                   # approaching follower behind
+                gap = car.s - o.s - o.length
+                needed = o.s0 + o.v * o.v / (2.0 * o.braking)
+                if gap < needed:
+                    return False
         return True
 
     def _approach_fronts(self, cars_on_edge: Dict[int, List[Car]]) -> Dict[int, list]:
