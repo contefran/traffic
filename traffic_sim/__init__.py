@@ -6,7 +6,8 @@ dependencies. ``Visuals`` is imported lazily so the core can run headless
 """
 
 from .network import Node, Edge, RoadNetwork, build_grid_network, build_city_grid
-from .vehicles import Car
+from .vehicles import (Car, VehicleType, DEFAULT_FLEET, assign_vehicle_types,
+                       apply_vehicle_type)
 from .simulation import TrafficSim
 from .routing import RandomRouter, ShortestPathRouter
 from .signals import (
@@ -22,9 +23,12 @@ from .priority import PriorityModel
 from .left_turns import PermissiveLeftModel
 from .zones import LandUse, assign_zones, edges_by_zone, apply_zone_speeds
 from .grade import add_grade_separated
+from .roundabouts import add_roundabout, add_roundabouts
 from .demand import DemandModel, Period
 from .parking import ParkingModel
 from .schedule import DailySchedule
+from .activities import (ActivitySchedule, ActivityKind, Activity, Venues,
+                         assign_venues)
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
 from .units import kmh_to_ms, ms_to_kmh
 
@@ -35,6 +39,10 @@ __all__ = [
     "build_grid_network",
     "build_city_grid",
     "Car",
+    "VehicleType",
+    "DEFAULT_FLEET",
+    "assign_vehicle_types",
+    "apply_vehicle_type",
     "TrafficSim",
     "RandomRouter",
     "ShortestPathRouter",
@@ -52,28 +60,39 @@ __all__ = [
     "edges_by_zone",
     "apply_zone_speeds",
     "add_grade_separated",
+    "add_roundabout",
+    "add_roundabouts",
     "DemandModel",
     "Period",
     "ParkingModel",
     "DailySchedule",
+    "ActivitySchedule",
+    "ActivityKind",
+    "Activity",
+    "Venues",
+    "assign_venues",
     "MetricsCollector",
     "StepMetrics",
     "TripMetrics",
     "kmh_to_ms",
     "ms_to_kmh",
     "Visuals",
+    "Dashboard",
 ]
 
 
 def __getattr__(name):
-    """Lazily resolve :class:`Visuals` on first access.
+    """Lazily resolve the matplotlib-backed classes on first access.
 
     Keeps ``import traffic_sim`` free of matplotlib/numpy: those are only pulled
-    in when ``traffic_sim.Visuals`` is actually requested, so the simulation core
-    stays headless-friendly (e.g. behind an API). Any other attribute raises
-    :class:`AttributeError` as usual.
+    in when ``traffic_sim.Visuals`` / ``traffic_sim.Dashboard`` is actually
+    requested, so the simulation core stays headless-friendly (e.g. behind an
+    API). Any other attribute raises :class:`AttributeError` as usual.
     """
     if name == "Visuals":
         from .visualization import Visuals
         return Visuals
+    if name == "Dashboard":
+        from .dashboard import Dashboard
+        return Dashboard
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

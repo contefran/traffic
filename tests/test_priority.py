@@ -32,6 +32,10 @@ def test_no_priority_model_means_no_yield():
     south = _edge(net, net.node_id[(1, 0)], c)  # heading north into centre
     cars = [Car(id=0, edge_id=west, s=10.0, v=8.0),
             Car(id=1, edge_id=south, s=10.0, v=8.0)]
+    # Commit straight-through movements so the turn-approach slowdown doesn't
+    # confound this yield test (it's about right-of-way, not cornering speed).
+    cars[0].next_edge = _edge(net, c, net.node_id[(2, 1)])   # west car continues east
+    cars[1].next_edge = _edge(net, c, net.node_id[(1, 2)])   # south car continues north
     start_edges = {car.id: car.edge_id for car in cars}
     sim = TrafficSim(net, cars, RandomRouter(net, seed=0))
     for _ in range(40):
@@ -139,6 +143,36 @@ def test_priority_is_deterministic_and_keeps_flowing():
     a = run()
     b = run()
     assert a == b  # deterministic
+
+
+def test_yield_never_forces_a_car_past_its_point_of_no_return():
+    # A car too close to the line to stop even at max braking is already
+    # committed into the junction. Forcing it to yield would only manufacture a
+    # phantom crash at the stop line (it cannot stop), so it commits through —
+    # exactly as a car clears a yellow. Two fast conflicting cars, both a metre
+    # or two from an unsignalized crossing: whichever the priority model would
+    # make yield is past its point of no return, so neither manufactures a crash.
+    net = _straight_grid()
+    c = net.node_id[(1, 1)]
+    length = net.edges[0].length
+    west = _edge(net, net.node_id[(0, 1)], c)   # eastbound through
+    south = _edge(net, net.node_id[(1, 0)], c)  # northbound through (conflicts)
+    cars = [Car(id=0, edge_id=west, s=length - 2.0, v=12.0),
+            Car(id=1, edge_id=south, s=length - 3.0, v=10.0)]
+    cars[0].next_edge = _edge(net, c, net.node_id[(2, 1)])
+    cars[1].next_edge = _edge(net, c, net.node_id[(1, 2)])
+    # Sanity: the priority model *does* want one of them to yield here.
+    pm = PriorityModel(net)
+    contenders = [(west, cars[0].next_edge, 2.0, 12.0),
+                  (south, cars[1].next_edge, 3.0, 10.0)]
+    assert (pm.must_yield(west, cars[0].next_edge, contenders)
+            or pm.must_yield(south, cars[1].next_edge, contenders))
+
+    sim = TrafficSim(net, cars, RandomRouter(net, seed=0), priority=pm)
+    for _ in range(30):
+        sim.step(0.1)
+    assert sim.crashes == 0, "a committed (past-PONR) yielder must not crash the line"
+    assert all(car.edge_id != start for car, start in ((cars[0], west), (cars[1], south)))
 
 
 def test_two_way_stop_lets_priority_car_through_first():

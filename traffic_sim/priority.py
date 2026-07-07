@@ -46,7 +46,8 @@ class PriorityModel:
     """
 
     def __init__(self, net: RoadNetwork, *, trigger_dist: float = 30.0,
-                 critical_gap: float = 2.5, min_gap: float = 6.0) -> None:
+                 critical_gap: float = 2.5, min_gap: float = 6.0,
+                 circulating=None) -> None:
         """Configure the right-of-way thresholds.
 
         ``trigger_dist`` — only cars within this distance of a node are
@@ -54,12 +55,16 @@ class PriorityModel:
         used for gap acceptance; a higher-priority car counts as "imminent" when
         it is within ``speed * critical_gap`` [s]. ``min_gap`` — a floor on that
         distance, so a car essentially at the stop line always counts as present
-        even at low speed [m].
+        even at low speed [m]. ``circulating`` — a set of **roundabout ring** edge
+        ids; at a ring node a car *entering* the ring yields to any imminent car
+        already *circulating*, and circulating cars never yield (that's what makes
+        a roundabout a roundabout — see :meth:`must_yield`).
         """
         self.net = net
         self.trigger_dist = trigger_dist  # only cars this near a node contest [m]
         self.critical_gap = critical_gap  # critical time headway for acceptance [s]
         self.min_gap = min_gap            # closer than this counts as "at the node" [m]
+        self.circulating = set(circulating) if circulating else set()
 
     def _is_arterial(self, edge_id: int) -> bool:
         """Whether ``edge_id`` is an arterial (speed limit above the default)."""
@@ -100,6 +105,17 @@ class PriorityModel:
         yield to a higher-priority conflicting contender at the node."""
         if my_to is None:
             return False  # dead-end: nothing to enter
+        # Roundabout right-of-way overrides the grid rules at a ring node: a car
+        # already circulating has absolute priority and never yields, while a car
+        # entering the ring (its committed movement *is* a circulating edge)
+        # yields to any imminent circulating car.
+        if self.circulating:
+            if my_from in self.circulating:
+                return False
+            if my_to in self.circulating:
+                return any(self._imminent(gap, speed)
+                           for from_e, _to_e, gap, speed in contenders
+                           if from_e in self.circulating)
         if turn_type(self.net, my_from, my_to) is TurnType.RIGHT:
             return False  # right turns never yield in this model
         my_rank = self._rank(my_from)

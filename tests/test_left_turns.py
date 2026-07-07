@@ -88,7 +88,9 @@ def _left_turn_sim(with_model):
     net = build_grid_network(3, 3, block=50.0)
     W, X, N, E = _nodes(net)
     approach = _edge(net, W, X)
-    a = Car(id=0, edge_id=approach, s=45.0, v=10.0)
+    # Far enough from the junction that the turn-approach slowdown isn't yet
+    # binding, so what braking we see is the permissive-left yield, not the turn.
+    a = Car(id=0, edge_id=approach, s=20.0, v=10.0)
     a.next_edge = _edge(net, X, N)                     # committed to turn left
     b = Car(id=1, edge_id=_edge(net, E, X), s=48.0, v=12.0)   # imminent oncoming
     signals = SignalSystem(net, FixedTimeController(green_time=30.0,
@@ -107,23 +109,33 @@ def test_permissive_left_brakes_for_oncoming_when_model_present():
     assert a_yes.v < a_no.v
 
 
-def test_permissive_left_is_inert_at_unsignalized_nodes():
-    # At an *unsignalized* node right-of-way is the PriorityModel's job; the
-    # permissive-left model must not fire (movement_state is GREEN there by
-    # default, and applying it deadlocked elevated ramp merges — see the guard
-    # in TrafficSim.step). A left-turner should proceed even with imminent
-    # oncoming and the model attached.
+def _unsignalized_left_sim(with_model):
+    """A left-turner with imminent oncoming, approaching an *unsignalized* node."""
     net = build_grid_network(3, 3, block=50.0)
     W, X, N, E = _nodes(net)
     approach = _edge(net, W, X)
-    a = Car(id=0, edge_id=approach, s=45.0, v=10.0)
+    a = Car(id=0, edge_id=approach, s=20.0, v=10.0)
     a.next_edge = _edge(net, X, N)                     # committed to turn left
     b = Car(id=1, edge_id=_edge(net, E, X), s=48.0, v=12.0)   # imminent oncoming
     signals = SignalSystem(net, FixedTimeController(green_time=30.0,
                                                     start=Orientation.HORIZONTAL),
                            unsignalized_nodes={X})
+    lt = PermissiveLeftModel(net) if with_model else None
     sim = TrafficSim(net, [a, b], RandomRouter(net, seed=0), signals=signals,
-                     left_turn=PermissiveLeftModel(net))
-    v0 = a.v
-    sim.step(0.1)
-    assert a.v > v0, "left-turner must not yield at an unsignalized node"
+                     left_turn=lt)
+    return sim, a
+
+
+def test_permissive_left_is_inert_at_unsignalized_nodes():
+    # At an *unsignalized* node right-of-way is the PriorityModel's job; the
+    # permissive-left model must not fire (movement_state is GREEN there by
+    # default, and applying it deadlocked elevated ramp merges — see the guard
+    # in TrafficSim.step). So attaching the model changes nothing there: the
+    # left-turner behaves identically with and without it (both just accelerate,
+    # unlike the signalized case where the model brakes for oncoming).
+    sim_yes, a_yes = _unsignalized_left_sim(with_model=True)
+    sim_no, a_no = _unsignalized_left_sim(with_model=False)
+    sim_yes.step(0.1)
+    sim_no.step(0.1)
+    assert a_yes.v == a_no.v, "the left model must be inert at an unsignalized node"
+    assert a_yes.v > 10.0, "and the car should be free to accelerate (not yielding)"

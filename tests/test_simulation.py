@@ -97,3 +97,38 @@ def test_dead_end_stops_car():
     assert car.edge_id == 0
     assert car.s == net.edges[0].length
     assert car.v == 0.0
+
+
+def _out_edge(net, node, to):
+    return next(e for e in net.nodes[node].out_edges if net.edges[e].v == to)
+
+
+def test_car_slows_to_turn_speed_but_not_when_straight():
+    # A car cruising at the 50 km/h limit brakes to ~20 km/h to take a turn, but
+    # keeps its speed through a straight movement. 5x5 grid so the centre has a
+    # left, a right and a straight option.
+    from traffic_sim.simulation import TURN_SPEED
+    net = build_grid_network(5, 5, block=150.0)
+    X = net.node_id[(2, 2)]
+    W, N, S, E = (net.node_id[p] for p in [(1, 2), (2, 3), (2, 1), (3, 2)])
+    approach = _out_edge(net, W, X)
+
+    def junction_speed(exit_node):
+        car = Car(id=0, edge_id=approach, s=0.0, v=13.9)   # ~50 km/h
+        car.next_edge = _out_edge(net, X, exit_node)
+        sim = TrafficSim(net, [car], RandomRouter(net, seed=0))
+        for _ in range(400):
+            on = car.edge_id
+            sim.step(0.1)
+            if car.edge_id != on:                          # just crossed X
+                return car.v
+            if car.edge_id == approach:                    # keep the turn committed
+                car.next_edge = _out_edge(net, X, exit_node)
+        raise AssertionError("car never crossed the junction")
+
+    straight = junction_speed(E)
+    left = junction_speed(N)
+    right = junction_speed(S)
+    assert straight > 13.0                                  # essentially unslowed
+    assert abs(left - TURN_SPEED) < 1.0                     # ~20 km/h into the turn
+    assert abs(right - TURN_SPEED) < 1.0

@@ -102,6 +102,36 @@ class MetricsCollector:
     # Per-car in-progress trip state.
     _trip: Dict[int, dict] = field(default_factory=dict)
     _last_t: Optional[float] = None
+    # Crashes recorded before the last reset() — the sim's own counter is
+    # cumulative for the whole run, so ``crashes`` reports it minus this base.
+    _crash_base: int = 0
+
+    def reset(self) -> None:
+        """Forget everything recorded so far and start a fresh window.
+
+        Everything reported afterwards — time series, trips, crashes, fuel,
+        per-node waits — covers only what happens *after* the reset, so the
+        collector can measure a new parameter regime cleanly (e.g. after a
+        dashboard knob was turned). The simulation itself is untouched.
+        In-progress trips are dropped and restart from each car's current
+        position on the next :meth:`record`, so their delay baselines are
+        consistent with the new regime; the sim's cumulative crash counter is
+        re-baselined so ``crashes`` counts collisions since the reset.
+        """
+        self._crash_base += self.crashes
+        self.history.clear()
+        self.edge_crossings.clear()
+        self.trips.clear()
+        self.crashes = 0
+        self.max_decel = 0.0
+        self.fuel_proxy = 0.0
+        self.edge_history.clear()
+        self.node_crossings.clear()
+        self.node_wait.clear()
+        self._last_edge.clear()
+        self._last_v.clear()
+        self._trip.clear()
+        self._last_t = None
 
     def record(self, sim) -> None:
         """Snapshot ``sim``'s current state into a new :class:`StepMetrics`.
@@ -150,8 +180,11 @@ class MetricsCollector:
                                     + FUEL_ACCEL * c.v * max(0.0, a)) * dt
             self._last_v[c.id] = c.v
 
-        # The simulation counts genuine collisions (couldn't stop at max braking).
-        self.crashes = getattr(sim, "crashes", self.crashes)
+        # The simulation counts genuine collisions (couldn't stop at max
+        # braking) cumulatively; report them relative to the last reset().
+        sim_crashes = getattr(sim, "crashes", None)
+        if sim_crashes is not None:
+            self.crashes = sim_crashes - self._crash_base
 
         # A destination-aware router exposes free_flow_time; without it (a
         # wandering router) cars have no destination and no trips are produced.
