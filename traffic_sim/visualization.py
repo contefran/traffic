@@ -186,6 +186,67 @@ class Visuals:
         return [Line2D([], [], color=colors[u], linewidth=6, alpha=0.5, label=u.value)
                 for u in LandUse if any(v is u for v in zones.values())]
 
+    def _map_backdrop(self, ax, net, zones=None):
+        """Draw the static city backdrop onto ``ax`` and frame it.
+
+        Zone glow first (under the streets), then the streets themselves; the
+        axes are set equal-aspect, padded enough to include the elevated ring
+        (which renders offset by ``LEVEL_OFFSET`` beyond the ground bounds),
+        and stripped of ticks/frame. Returns the land-use legend handles
+        (``None`` when ``zones`` is not given). Shared by the demo animation
+        and the interactive dashboard.
+        """
+        handles = (self._draw_zone_glow(ax, net, zones)
+                   if zones is not None else None)
+        self._draw_edges(ax, net)
+        min_x, min_y, max_x, max_y = net.bounds()
+        ax.set_aspect("equal")
+        pad = LEVEL_OFFSET + 24
+        ax.set_xlim(min_x - pad, max_x + pad)
+        ax.set_ylim(min_y - pad, max_y + pad)
+        ax.axis("off")                     # no ticks / frame — just the city
+        return handles
+
+    @staticmethod
+    def _make_clock(fig, rect):
+        """Create the wall-clock text artist in its **own** axes at ``rect``.
+
+        A dedicated axes is what makes the clock survive blitting — an artist
+        placed outside its parent axes is not redrawn on a blit (the clock
+        used to vanish in the live window); here it blits from its own little
+        axes in the figure margin.
+        """
+        clock_ax = fig.add_axes(rect)
+        clock_ax.axis("off")
+        return clock_ax.text(0.5, 0.5, "", transform=clock_ax.transAxes,
+                             ha="center", va="center", fontsize=14,
+                             fontweight="bold", family="monospace",
+                             bbox=dict(boxstyle="round", fc="white",
+                                       ec="0.6", alpha=0.9))
+
+    @staticmethod
+    def _clock_label(t, day_length):
+        """``HH:MM  ·  Period`` for sim time ``t`` on the midnight-based day."""
+        frac = (t % day_length) / day_length
+        minutes = int(round(frac * 1440)) % 1440
+        # Quarters match DemandModel.period (Night, Morning, Midday, Evening).
+        name = ("Night", "Morning", "Midday", "Evening")[min(3, int(frac * 4))]
+        return f"{minutes // 60:02d}:{minutes % 60:02d}  ·  {name}"
+
+    @staticmethod
+    def _resolve_day_length(sim, day_length):
+        """``day_length`` as given, else read from the sim's demand model."""
+        if day_length is None:
+            demand = getattr(getattr(sim, "router", None), "demand", None)
+            day_length = getattr(demand, "day_length", None)
+        return day_length
+
+    @staticmethod
+    def _offsets(net, cars):
+        """Screen positions for ``cars`` as an (N, 2) array (empty-safe)."""
+        pts = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars]
+        return np.array(pts) if pts else np.empty((0, 2))
+
     def _zone_legend(self, ax, handles):
         """Create a 'land use' legend on the right, stacked *below* the signal one.
 
@@ -422,19 +483,7 @@ class Visuals:
         animation just renders ``steps // steps_per_frame`` frames.
         """
         fig, ax = plt.subplots(figsize=(8.6, 6))
-        # Land-use glow first (under the streets), so each street shows a soft
-        # colour halo without recolouring the black road or the traffic.
-        zone_handles = (self._draw_zone_glow(ax, net, zones)
-                        if zones is not None else None)
-        self._draw_edges(ax, net)
-        min_x, min_y, max_x, max_y = net.bounds()
-        ax.set_aspect("equal")
-        # Pad enough to include the elevated ring, which renders offset by
-        # LEVEL_OFFSET beyond the ground bounds (else the border is clipped).
-        pad = LEVEL_OFFSET + 24
-        ax.set_xlim(min_x - pad, max_x + pad)
-        ax.set_ylim(min_y - pad, max_y + pad)
-        ax.axis("off")                     # no ticks / frame — just the city
+        zone_handles = self._map_backdrop(ax, net, zones)
 
         signals = sim.signals if show_signals else None
         sig_scat = None
@@ -453,22 +502,11 @@ class Visuals:
             # Reserve room on the right so the legends and clock sit beside the map.
             fig.subplots_adjust(left=0.06, right=0.66)
 
-        # Live wall clock, in its **own** axes in the top-right margin (outside the
-        # map). A dedicated axes is what makes it survive blitting — an artist
-        # placed outside its parent axes is not redrawn on a blit, so the clock
-        # vanished in the live window; here it blits from its own little axes.
-        if day_length is None:
-            demand = getattr(getattr(sim, "router", None), "demand", None)
-            day_length = getattr(demand, "day_length", None)
-        clock = None
-        if day_length:
-            clock_ax = fig.add_axes([0.67, 0.9, 0.31, 0.07])
-            clock_ax.axis("off")
-            clock = clock_ax.text(0.5, 0.5, "", transform=clock_ax.transAxes,
-                                  ha="center", va="center", fontsize=14,
-                                  fontweight="bold", family="monospace",
-                                  bbox=dict(boxstyle="round", fc="white",
-                                            ec="0.6", alpha=0.9))
+        # Live wall clock in the top-right margin (see _make_clock for why it
+        # needs its own axes to survive blitting).
+        day_length = self._resolve_day_length(sim, day_length)
+        clock = (self._make_clock(fig, [0.67, 0.9, 0.31, 0.07])
+                 if day_length else None)
 
         # Cars in near-black so they stay salient over the coloured land wash
         # (blue would clash with the office zone). Active cars are semi-transparent
@@ -481,19 +519,6 @@ class Visuals:
         parked = ax.scatter([], [], s=4, color=car_color, alpha=0.12,
                             edgecolors="none", zorder=3)
 
-        def _offsets(cars):
-            """Screen positions for ``cars`` as an (N, 2) array (empty-safe)."""
-            pts = [net.point_on_edge_lane(c.edge_id, c.s, c.lane) for c in cars]
-            return np.array(pts) if pts else np.empty((0, 2))
-
-        def clock_label(t):
-            """``HH:MM  ·  Period`` for sim time ``t`` on the midnight-based day."""
-            frac = (t % day_length) / day_length
-            minutes = int(round(frac * 1440)) % 1440
-            # Quarters match DemandModel.period (Night, Morning, Midday, Evening).
-            name = ("Night", "Morning", "Midday", "Evening")[min(3, int(frac * 4))]
-            return f"{minutes // 60:02d}:{minutes % 60:02d}  ·  {name}"
-
         def dynamic():
             """The blit artists that change each frame (skip the absent ones)."""
             return tuple(a for a in (scat, parked, sig_scat, clock) if a is not None)
@@ -503,7 +528,7 @@ class Visuals:
             scat.set_offsets(np.empty((0, 2)))
             parked.set_offsets(np.empty((0, 2)))
             if clock is not None:
-                clock.set_text(clock_label(sim.t))
+                clock.set_text(self._clock_label(sim.t, day_length))
             return dynamic()
 
         def update(frame):
@@ -511,14 +536,14 @@ class Visuals:
             for _ in range(steps_per_frame):
                 sim.step(dt)
             active = [c for c in sim.cars if c.active]
-            scat.set_offsets(_offsets(active))
+            scat.set_offsets(self._offsets(net, active))
             # Marker size grows with vehicle length, so trucks/buses read big.
             scat.set_sizes([14.0 + 3.5 * c.length for c in active])
-            parked.set_offsets(_offsets([c for c in sim.cars if not c.active]))
+            parked.set_offsets(self._offsets(net, [c for c in sim.cars if not c.active]))
             if sig_scat is not None:
                 sig_scat.set_color(self._signal_colors(signals, sim.t, specs))
             if clock is not None:
-                clock.set_text(clock_label(sim.t))
+                clock.set_text(self._clock_label(sim.t, day_length))
             return dynamic()
 
         interval = 1000.0 / fps if fps else dt * 1000

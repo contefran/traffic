@@ -58,6 +58,42 @@ def test_crossings_counted_as_throughput():
     assert metrics.summary()["total_crossings"] == total
 
 
+def test_reset_starts_a_fresh_collection_window():
+    net = build_grid_network(width=4, height=3, block=50.0)
+    metrics = MetricsCollector(record_edges=True)
+    sim = TrafficSim(net, [Car(0, 0, 0.0, 0.0)], RandomRouter(net, seed=1), metrics=metrics)
+    for _ in range(30):
+        sim.step(0.1)
+    assert len(metrics.history) == 30 and metrics.fuel_proxy > 0
+
+    metrics.reset()
+    assert metrics.history == [] and metrics.trips == []
+    assert metrics.fuel_proxy == 0.0 and metrics.max_decel == 0.0
+    assert metrics.edge_history == [] and metrics.node_wait == {}
+    assert metrics.summary() == {"steps": 0}
+
+    for _ in range(10):                     # recording resumes cleanly
+        sim.step(0.1)
+    assert len(metrics.history) == 10
+    assert metrics.times[0] == pytest.approx(3.1)  # sim clock kept running
+
+
+def test_reset_rebaselines_the_cumulative_crash_counter():
+    net = build_grid_network(width=4, height=3, block=50.0)
+    metrics = MetricsCollector()
+    sim = TrafficSim(net, [Car(0, 0, 0.0, 0.0)], RandomRouter(net, seed=1), metrics=metrics)
+    sim.crashes = 7                          # pretend collisions happened
+    sim.step(0.1)
+    assert metrics.crashes == 7
+
+    metrics.reset()                          # crashes now counted since reset
+    sim.step(0.1)
+    assert metrics.crashes == 0
+    sim.crashes = 9                          # two more genuine collisions
+    sim.step(0.1)
+    assert metrics.crashes == 2
+
+
 def test_occupancy_counts_cars_per_edge():
     net = build_grid_network(width=4, height=3, block=50.0)
     metrics = MetricsCollector()

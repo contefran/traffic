@@ -77,18 +77,22 @@ __all__ = [
     "kmh_to_ms",
     "ms_to_kmh",
     "Visuals",
+    "Dashboard",
 ]
 
 
 def __getattr__(name):
-    """Lazily resolve :class:`Visuals` on first access.
+    """Lazily resolve the matplotlib-backed classes on first access.
 
     Keeps ``import traffic_sim`` free of matplotlib/numpy: those are only pulled
-    in when ``traffic_sim.Visuals`` is actually requested, so the simulation core
-    stays headless-friendly (e.g. behind an API). Any other attribute raises
-    :class:`AttributeError` as usual.
+    in when ``traffic_sim.Visuals`` / ``traffic_sim.Dashboard`` is actually
+    requested, so the simulation core stays headless-friendly (e.g. behind an
+    API). Any other attribute raises :class:`AttributeError` as usual.
     """
     if name == "Visuals":
         from .visualization import Visuals
         return Visuals
+    if name == "Dashboard":
+        from .dashboard import Dashboard
+        return Dashboard
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

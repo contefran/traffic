@@ -111,6 +111,24 @@ class TrafficSim:
         """True if ``node_id`` has no active signal (so right-of-way applies)."""
         return self.signals is None or not self.signals.is_signalized(node_id)
 
+    @staticmethod
+    def _can_unpark(car: Car, lane_cars: List[Car]) -> bool:
+        """Whether a parked ``car`` can pull out into its lane right now.
+
+        Requires a standstill gap both ahead (to its would-be leader) and behind
+        (so the would-be follower isn't suddenly inside its own gap) among
+        ``lane_cars``, the active cars on the same (edge, lane). The margins use
+        the cars' own ``s0``, so cautious traffic (bigger gaps) is genuinely
+        harder to pull out into. Waking never injects an overlap this way.
+        """
+        for o in lane_cars:
+            if o.s >= car.s:                        # would be car's leader
+                if o.s - car.s < car.length + car.s0:
+                    return False
+            elif car.s - o.s < o.length + o.s0:     # would be car's follower
+                return False
+        return True
+
     def _approach_fronts(self, cars_on_edge: Dict[int, List[Car]]) -> Dict[int, list]:
         """Per unsignalized node, the front car of each approach that is near
         enough to contest, as ``(from_edge, to_edge, gap, speed)``. Commits each
@@ -247,12 +265,26 @@ class TrafficSim:
 
         # Wake pass: parked cars whose dwell is over re-enter the flow and head to
         # their next destination — the next leg of their activity plan if a
-        # schedule owns it, otherwise a fresh one from the router.
+        # schedule owns it, otherwise a fresh one from the router. A car only
+        # pulls out into a real **gap** at its kerbside spot (leader and follower
+        # clearance in its lane); if traffic is queued over the spot it stays
+        # parked and retries next step — re-entering regardless would inject an
+        # overlapping car, a placement artifact the crash counter would then
+        # score every step (not a genuine collision).
         if self.parking is not None:
-            for car in self.cars:
-                if not car.active and self.t >= car.wake_t:
+            waking = [c for c in self.cars if not c.active and self.t >= c.wake_t]
+            if waking:
+                lane_cars: Dict[Tuple[int, int], List[Car]] = {}
+                for c in self.cars:
+                    if c.active:
+                        lane_cars.setdefault((c.edge_id, c.lane), []).append(c)
+                for car in waking:
+                    slot = lane_cars.setdefault((car.edge_id, car.lane), [])
+                    if not self._can_unpark(car, slot):
+                        continue                     # blocked in; try next step
                     car.active = True
                     car.next_edge = None
+                    slot.append(car)                 # claims the spot this step
                     if self.schedule is not None and hasattr(self.schedule, "on_wake"):
                         self.schedule.on_wake(car, self.t)
                     elif hasattr(self.router, "assign_destination"):
@@ -380,6 +412,18 @@ class TrafficSim:
                     obstacles.append((edge.length - car.s, 0.0))
                 if stop_pos is not None:
                     obstacles.append((stop_pos - car.s, 0.0))
+                # Spillback look-ahead: the front car also brakes for the queue
+                # tail on its committed next edge — just a leader seen across
+                # the junction. Without this, a car is blind past the node and
+                # sails into a street that is jammed back to its start.
+                if idx == 0 and car.next_edge is not None:
+                    nxt = self.net.edges[car.next_edge]
+                    slot = cars_on_lane.get(
+                        (car.next_edge, min(car.lane, nxt.lanes - 1)))
+                    if slot:
+                        tail = slot[-1]         # deepest car on the next edge
+                        obstacles.append(
+                            ((edge.length - car.s) + tail.s - car.length, tail.v))
 
                 # Most restrictive (smallest) IDM acceleration over obstacles.
                 if obstacles:
@@ -433,12 +477,38 @@ class TrafficSim:
                 car.s = new_s
                 car.trail.append((self.t, car.edge_id, car.s))
 
-        for car, next_edge, new_s, new_lane in transfers:
-            car.edge_id = next_edge
+        for car, next_eid, new_s, new_lane in transfers:
+            # A transfer never lands a car on top of the queue on its new edge:
+            # it slots in behind the current tail. If the street is full back to
+            # the junction, the car waits at the stop line instead of entering
+            # the box (spillback, not an overlap); if it lands harder than the
+            # tail allows despite the look-ahead, that is a genuine rear-end
+            # while crossing — counted once, then resolved (position clamped,
+            # tail's speed carried), so no overlap ever persists.
+            slot = cars_on_lane.setdefault((next_eid, new_lane), [])
+            tail = slot[-1] if slot else None
+            if tail is not None:
+                allowed = tail.s - car.length - LEADER_BUFFER
+                if allowed < 0.0:                 # no room past the junction
+                    car.s = self.net.edges[car.edge_id].length
+                    car.v = 0.0                   # wait at the line, retry later
+                    continue                      # (keeps next_edge committed)
+                if new_s > allowed:
+                    self.crashes += 1             # rear-ended the queue tail
+                    car.v = min(car.v, tail.v)
+                    new_s = allowed
+            # Leave the old lane bucket before mutating the car, so a later
+            # transfer targeting the old edge never sees a phantom tail whose
+            # ``s`` is already in new-edge coordinates.
+            old_slot = cars_on_lane.get((car.edge_id, car.lane))
+            if old_slot is not None and car in old_slot:
+                old_slot.remove(car)
+            car.edge_id = next_eid
             car.next_edge = None  # re-route from the new edge next step
             car.s = new_s
             car.lane = new_lane
             car.trail.append((self.t, car.edge_id, car.s))
+            slot.append(car)      # now the deepest car: visible to later transfers
 
         # Park pass: a car halted at its destination node goes inactive for a
         # dwell (the wake pass re-enters it later with a fresh destination).

@@ -214,6 +214,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-show-signals", dest="show_signals", action="store_false",
                      help="hide the traffic-light markers (declutters big maps; "
                           "signals still operate)")
+    run.add_argument("--dashboard", action="store_true",
+                     help="live window with tuning knobs (street speeds, following "
+                          "gaps, signal timing, …) and a resettable live-metrics "
+                          "panel; runs day after day until the window is closed")
 
     return p
 
@@ -310,7 +314,13 @@ def main(argv=None) -> None:
           f"steps={args.steps} (day={args.day_length:.0f}s)")
 
     visuals = Visuals()
-    if args.save_gif:
+    if args.dashboard:
+        from traffic_sim import Dashboard
+
+        Dashboard(net, sim, zones, dt=args.dt, day_length=args.day_length,
+                  show_signals=args.show_signals, fps=args.fps,
+                  steps_per_frame=args.steps_per_frame).show()
+    elif args.save_gif:
         visuals.save_animation(net, sim, args.save_gif,
                                dt=args.dt, steps=args.steps, fps=args.fps, zones=zones,
                                show_signals=args.show_signals, day_length=args.day_length,
