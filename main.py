@@ -241,9 +241,11 @@ def build_simulation(args):
         ring_speed=kmh_to_ms(args.ring_speed),
         ring_lanes=args.ring_lanes, ring_access_spacing=args.ring_access_spacing,
     )
+    mainline = set()
     if args.grade:
-        add_grade_separated(net, block=args.block, speed=kmh_to_ms(args.ring_speed),
-                            lanes=args.ring_lanes, access_spacing=args.ring_access_spacing)
+        _, mainline = add_grade_separated(
+            net, block=args.block, speed=kmh_to_ms(args.ring_speed),
+            lanes=args.ring_lanes, access_spacing=args.ring_access_spacing)
 
     # Geometric roundabouts on some local crossings (before zoning, so their ring
     # edges stay unzoned). Ring nodes are unsignalized and circulating traffic has
@@ -292,8 +294,12 @@ def build_simulation(args):
                   if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
     unsig |= ring_nodes          # roundabout ring nodes are never signalized
     signals = SignalSystem(net, controller, unsignalized_nodes=unsig or None)
-    # Priority gives circulating roundabout traffic right-of-way over entries.
-    priority = PriorityModel(net, circulating=circulating) if args.priority else None
+    # Priority gives right-of-way to traffic already on a "circulating" road over
+    # traffic trying to join it: roundabout ring edges *and* the elevated highway
+    # mainline (so on-ramp traffic yields to the highway and the highway never
+    # stops — the same gap-acceptance rule serves both).
+    priority = (PriorityModel(net, circulating=circulating | mainline)
+                if args.priority else None)
     left_turn = PermissiveLeftModel(net)   # inert under protected phasing
     parking = ParkingModel(seed=args.car_seed, zones=zones) if args.parking else None
     metrics = MetricsCollector()
