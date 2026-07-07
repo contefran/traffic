@@ -52,6 +52,24 @@ def test_parking_reduces_active_cars_and_keeps_trips_clean():
         assert tp.delay >= -1e-6
 
 
+def test_arriving_at_own_destination_is_not_a_crash():
+    # A car creeping the last centimetres into its own parking spot (its
+    # destination point is the binding stop) must not count as a collision —
+    # arriving is not crashing. This was ~2/3 of the old crash count.
+    net = build_grid_network(4, 4, block=150.0)
+    dest = net.node_id[(2, 1)]
+    start, nbr = net.node_id[(0, 1)], net.node_id[(1, 1)]
+    car = Car(id=0, edge_id=_edge(net, start, nbr), s=0.0, v=0.0, dest=dest)
+    parking = ParkingModel(seed=0, default_dwell=(3.0, 3.0))
+    sim = TrafficSim(net, [car], ShortestPathRouter(net, seed=0), parking=parking)
+    for _ in range(500):
+        sim.step(0.1)
+        if not car.active:
+            break
+    assert not car.active, "car should have parked"
+    assert sim.crashes == 0, "arriving at its own address is not a collision"
+
+
 def test_no_parking_leaves_everyone_active():
     net = build_grid_network(4, 4, block=150.0)
     cars = [Car(id=k, edge_id=k, s=0.0, v=0.0) for k in range(5)]

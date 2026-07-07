@@ -112,6 +112,19 @@ class TrafficSim:
         return self.signals is None or not self.signals.is_signalized(node_id)
 
     @staticmethod
+    def _can_stop_within(car: Car, dist: float) -> bool:
+        """Whether ``car`` can halt within ``dist`` metres at its physical brake
+        limit — i.e. it is *before* its point of no return for a stop line ahead.
+
+        Shared by every stop-line decision: the signal yellow clearance and the
+        gap-acceptance yields (priority, permissive left). A car past this point
+        cannot stop no matter what, so *forcing* it to yield would only
+        manufacture a phantom collision at the line; instead it commits through,
+        exactly as a car clears a yellow. Rear-ends behind a real leader are
+        unaffected (a leader is a hard obstacle, not a stop-line decision)."""
+        return dist >= car.v * car.v / (2.0 * car.max_brake)
+
+    @staticmethod
     def _can_unpark(car: Car, lane_cars: List[Car]) -> bool:
         """Whether a parked ``car`` can pull out into its lane right now.
 
@@ -230,6 +243,15 @@ class TrafficSim:
                             continue                                 # cuts the follower off
                     a_new = self._idm_accel(car, v_des,
                                             self._gap_obstacle(car.s, car.length, leader))
+                    # Safety is symmetric (standard MOBIL): the *mover* must also
+                    # be able to follow its new leader without braking harder than
+                    # LANE_CHANGE_SAFE_BRAKE. Without this a car already braking in
+                    # its own lane (very negative a_old) could still net a positive
+                    # gain by diving into a tiny gap behind a slow leader — a cut-in
+                    # it then rear-ends next step. The geometric overlap check above
+                    # only guards the instant, not the stopping distance.
+                    if a_new < -LANE_CHANGE_SAFE_BRAKE:
+                        continue
                     gain = a_new - a_old + (KEEP_RIGHT_BONUS if target < car.lane else 0.0)
                     if gain > best_gain:
                         best_gain, best_lane = gain, target
@@ -367,27 +389,30 @@ class TrafficSim:
                     if sig_state is SignalState.RED:
                         red = True
                     elif sig_state is SignalState.YELLOW:
-                        # Clearance: stop unless the car physically cannot — i.e.
-                        # it could not halt before the line even at maximum
-                        # braking. Only then is it committed and proceeds (clears
-                        # on yellow instead of crashing the line). Using the
-                        # physical limit, rather than comfortable braking, keeps
-                        # cars from needlessly running the yellow into a
-                        # downstream queue.
-                        stop_dist = car.v * car.v / (2.0 * car.max_brake)
-                        if edge.length - car.s >= stop_dist:
+                        # Clearance: stop unless the car is past its point of no
+                        # return, in which case it commits and clears the yellow
+                        # instead of crashing the line (see _can_stop_within).
+                        if self._can_stop_within(car, edge.length - car.s):
                             red = True
+
+                # Gap-acceptance yields below only bind a car that can *still*
+                # stop for the line: a car past its point of no return is already
+                # committed into the junction, so forcing a yield it cannot honour
+                # would only manufacture a phantom crash at the stop line (this was
+                # the whole `red`-cause crash family — all at unsignalized/priority
+                # yields). A driver accepts or rejects the gap *before* committing;
+                # this makes the model do the same, exactly as the yellow does.
+                can_still_stop = self._can_stop_within(car, edge.length - car.s)
 
                 # Permissive left: a front left-turner on a *full* green must
                 # yield to imminent oncoming through traffic (inert under
-                # protected phasing, where that traffic is red). A car committing
-                # on yellow is past the point of no return and is not gated here.
-                # Only at *signalized* nodes — at unsignalized ones (e.g. elevated
-                # ramp merges) movement_state is GREEN by default and right-of-way
-                # is the PriorityModel's job; applying it there would spuriously
-                # yield forever and deadlock the merge.
+                # protected phasing, where that traffic is red). Only at
+                # *signalized* nodes — at unsignalized ones (e.g. elevated ramp
+                # merges) movement_state is GREEN by default and right-of-way is
+                # the PriorityModel's job; applying it there would spuriously yield
+                # forever and deadlock the merge.
                 if (self.left_turn is not None and idx == 0
-                        and sig_state is SignalState.GREEN
+                        and sig_state is SignalState.GREEN and can_still_stop
                         and not self._unsignalized(edge.v)
                         and car.next_edge is not None
                         and self.left_turn.must_yield(edge_id, car.next_edge,
@@ -396,7 +421,7 @@ class TrafficSim:
 
                 # At an unsignalized node the front car of an approach may have
                 # to yield right-of-way to conflicting higher-priority traffic.
-                if (self.priority is not None and idx == 0
+                if (self.priority is not None and idx == 0 and can_still_stop
                         and self._unsignalized(edge.v)
                         and self.priority.must_yield(edge_id, car.next_edge,
                                                      fronts.get(edge.v, []))):
@@ -440,24 +465,39 @@ class TrafficSim:
                 car.v = max(0.0, min(v_des, car.v + a * dt))
                 new_s = car.s + car.v * dt
 
-                # No-overlap constraint: a car may never pass its leader or cross
-                # a red stop line. With deceleration now physically bounded,
-                # reaching this constraint means even maximum braking was not
-                # enough to stop in time — a real crash. We still clamp the
-                # position (cars never visually overlap) but count the collision
-                # and carry the leader's speed through (a rear-end, not a
-                # teleport to zero).
-                max_s = None
+                # No-overlap constraint: a car may never pass the nearest stop
+                # ahead. That stop is a **hard obstacle** — its leader or a red
+                # stop line — or the car's **own destination point** (the address
+                # it is parking at). With deceleration physically bounded,
+                # crossing a *hard* obstacle despite maximum braking is a genuine
+                # collision (counted, leader's speed carried through — a rear-end,
+                # not a teleport to zero). Crossing one's own destination point is
+                # an **arrival**, not a crash: it clamps and comes to rest without
+                # counting (a car rolling the last centimetres into its parking
+                # spot is not a collision — this was ~2/3 of the old crash count).
+                # The binding (nearest) constraint decides which case applies.
+                max_s, hard = None, False
                 if leader is not None:
-                    max_s = leader.s - car.length - LEADER_BUFFER
-                if red:
-                    max_s = edge.length if max_s is None else min(max_s, edge.length)
-                if stop_pos is not None:
-                    max_s = stop_pos if max_s is None else min(max_s, stop_pos)
+                    max_s, hard = leader.s - car.length - LEADER_BUFFER, True
+                if red and (max_s is None or edge.length < max_s):
+                    max_s, hard = edge.length, True
+                if stop_pos is not None and (max_s is None or stop_pos < max_s):
+                    max_s, hard = stop_pos, False     # own address is the binding stop
                 if max_s is not None and new_s > max_s:
-                    self.crashes += 1
+                    if hard:
+                        # A collision needs closing speed. If the obstacle ahead
+                        # is moving at least as fast as the car (a leader pulling
+                        # away, a merge in behind a faster car), any overlap is a
+                        # one-step position artifact — not an impact — so clamp it
+                        # out but do not count it. A stationary red line (lead_v 0)
+                        # with the car still moving is a genuine run of the line.
+                        lead_v = leader.v if leader is not None else 0.0
+                        if car.v > lead_v:
+                            self.crashes += 1
+                        car.v = min(car.v, lead_v)
+                    else:
+                        car.v = 0.0                    # arrived: come to rest here
                     new_s = max(car.s, max_s)
-                    car.v = min(car.v, leader.v if leader is not None else 0.0)
 
                 # Reached the end of the edge.
                 if new_s >= edge.length:
@@ -494,9 +534,26 @@ class TrafficSim:
                     car.v = 0.0                   # wait at the line, retry later
                     continue                      # (keeps next_edge committed)
                 if new_s > allowed:
-                    self.crashes += 1             # rear-ended the queue tail
+                    # Only a car closing on the tail rear-ends it; entering behind
+                    # a faster tail that is pulling away is a one-step position
+                    # artifact (clamp, don't count) — same closing-speed rule as
+                    # the in-lane check above.
+                    if car.v > tail.v:
+                        self.crashes += 1        # rear-ended the queue tail
                     car.v = min(car.v, tail.v)
                     new_s = allowed
+                # Entry-speed cap: crawl into a backed-up junction rather than
+                # blast in at road speed. Cap the entry speed to what still lets
+                # the car brake (comfortably) behind the tail it is merging in
+                # behind — the merge analogue of the turn slowdown. Without it a
+                # car could geometrically *fit* just behind a near-stopped tail
+                # yet keep 10 m/s, guaranteeing a rear-end the very next step; the
+                # look-ahead can miss this when the queue forms during the crossing
+                # step. A clear entrance (tail far) leaves the cap slack, so free
+                # junctions are unaffected.
+                gap = tail.s - new_s - car.length
+                v_cap = tail.v + math.sqrt(2.0 * car.braking * max(0.0, gap))
+                car.v = min(car.v, v_cap)
             # Leave the old lane bucket before mutating the car, so a later
             # transfer targeting the old edge never sees a phantom tail whose
             # ``s`` is already in new-edge coordinates.

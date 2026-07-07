@@ -55,6 +55,44 @@ def test_transfer_slots_in_behind_the_queue_tail():
     assert mover.s <= tail.s - mover.length
 
 
+def test_entering_behind_a_faster_tail_is_not_a_crash():
+    # A car crossing a junction into a queue tail that is moving *faster* (pulling
+    # away) has no closing speed — any one-step overlap is a position artifact,
+    # not an impact, so it must not be counted.
+    net = build_grid_network(width=3, height=3, block=80.0)
+    mover = Car(id=0, edge_id=0, s=net.edges[0].length - 1.0, v=16.0)
+    target = net.edges[0].v
+    next_eid = next(e for e in net.nodes[target].out_edges
+                    if net.edges[e].id != 1)
+    mover.next_edge = next_eid
+    # A tail just inside the next edge, moving faster than the mover.
+    tail = Car(id=1, edge_id=next_eid, s=3.0, v=20.0)
+    sim = TrafficSim(net, [mover, tail], RandomRouter(net, seed=0))
+    for _ in range(5):
+        sim.step(0.1)
+    assert sim.crashes == 0, "a diverging tail is not a rear-end"
+
+
+def test_car_crawls_into_a_backed_up_junction():
+    # A fast car crossing into a near-stopped queue must slow to a stoppable
+    # entry speed (crawl in), not blast in at road speed and rear-end next step.
+    net = build_grid_network(width=3, height=3, block=80.0)
+    mover = Car(id=0, edge_id=0, s=net.edges[0].length - 1.0, v=16.0)
+    target = net.edges[0].v
+    next_eid = next(e for e in net.nodes[target].out_edges
+                    if net.edges[e].id != 1)
+    mover.next_edge = next_eid
+    tail = _blocker(1, next_eid, 6.0)               # standing queue tail
+    sim = TrafficSim(net, [mover, tail], RandomRouter(net, seed=0))
+    for _ in range(6):
+        sim.step(0.1)
+        if mover.edge_id == next_eid:
+            break
+    assert mover.edge_id == next_eid, "there was room to enter"
+    assert mover.v < 5.0, "entry speed capped so it can stop behind the tail"
+    assert sim.crashes == 0
+
+
 def test_parked_car_waits_for_a_kerbside_gap_to_unpark():
     net = build_grid_network(width=3, height=3, block=80.0)
     parked = Car(id=0, edge_id=0, s=20.0, v=0.0, active=False, wake_t=0.0)

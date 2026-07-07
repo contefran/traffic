@@ -122,6 +122,28 @@ def test_fast_car_changes_lane_to_overtake():
     assert sim.crashes == 0
 
 
+def test_mobil_will_not_dive_into_an_unsafe_gap():
+    # Symmetric MOBIL safety: a car braking hard behind a stopped leader in its
+    # own lane finds the adjacent lane hugely more attractive (its leader is
+    # farther), but that gap is still too short to follow at 12 m/s. The
+    # mover-side safe-brake check must veto the change — without it the car
+    # would cut in (a large apparent gain) and rear-end next step. Tests the
+    # lane-change decision directly, in isolation from the movement pass.
+    net = build_grid_network(3, 3, block=300.0)
+    net.edges[0].lanes = 2
+    car = Car(id=1, edge_id=0, s=86.0, v=12.0, lane=0)
+    stopped0 = Car(id=0, edge_id=0, s=91.0, v=0.0, lane=0, max_speed=0.0)  # 0.5 m ahead
+    stopped1 = Car(id=2, edge_id=0, s=93.5, v=0.0, lane=1, max_speed=0.0)  # 3 m ahead
+    sim = TrafficSim(net, [car, stopped0, stopped1], RandomRouter(net, seed=0))
+    buckets = {}
+    for c in (car, stopped0, stopped1):
+        buckets.setdefault((c.edge_id, c.lane), []).append(c)
+    for lst in buckets.values():
+        lst.sort(key=lambda c: c.s, reverse=True)
+    sim._apply_lane_changes(buckets)
+    assert car.lane == 0, "must not cut into a gap it cannot safely follow"
+
+
 def test_transfer_clamps_lane_to_next_edge():
     # A car in lane 2 moving onto a 1-lane edge ends up in lane 0 (clamped).
     net = build_grid_network(3, 3, block=150.0)
