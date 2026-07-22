@@ -24,6 +24,7 @@ from traffic_sim import (
     SignalSystem,
     PriorityModel,
     PermissiveLeftModel,
+    apply_speed_scaled_yellows,
     assign_zones,
     apply_zone_speeds,
     add_grade_separated,
@@ -194,7 +195,18 @@ def build_parser() -> argparse.ArgumentParser:
     control.add_argument("--green-time", type=float, default=4.5,
                          help="green duration per phase [s]")
     control.add_argument("--yellow", type=float, default=1.5,
-                         help="yellow/clearance interval per phase [s]")
+                         help="yellow/clearance interval per phase [s]; with "
+                              "--yellow-braking > 0 this is the *floor* for "
+                              "slow streets")
+    control.add_argument("--yellow-braking", type=float, default=6.5,
+                         help="scale each signalized node's yellow with its "
+                              "fastest approach speed: yellow = max(--yellow, "
+                              "v / (2*braking)), braking in m/s^2 (lower = "
+                              "longer yellows; 0 disables). The default 6.5 is "
+                              "the fleet's worst physical brake (a loaded "
+                              "truck), which only bites above ~70 km/h; 4.0 "
+                              "(comfortable braking) removes dilemma-zone "
+                              "crashes entirely but costs real capacity")
     control.add_argument("--priority", action=argparse.BooleanOptionalAction,
                          default=True,
                          help="right-of-way at unsignalized nodes")
@@ -294,6 +306,11 @@ def build_simulation(args):
                   if n.i in (0, args.width - 1) or n.j in (0, args.height - 1)}
     unsig |= ring_nodes          # roundabout ring nodes are never signalized
     signals = SignalSystem(net, controller, unsignalized_nodes=unsig or None)
+    # Dilemma-zone guard: a uniform yellow that suits 50 km/h locals is too
+    # short for fast arterials (a stopping leader must brake far beyond the
+    # comfortable rate follower gaps assume, and gets rear-ended). Scale each
+    # node's yellow with its fastest approach speed, --yellow as the floor.
+    apply_speed_scaled_yellows(signals, braking=args.yellow_braking)
     # Priority gives right-of-way to traffic already on a "circulating" road over
     # traffic trying to join it: roundabout ring edges *and* the elevated highway
     # mainline (so on-ramp traffic yields to the highway and the highway never

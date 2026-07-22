@@ -33,7 +33,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Button, Slider
 
 from .network import DEFAULT_SPEED_LIMIT
-from .signals import SignalPlan
+from .signals import SignalPlan, apply_speed_scaled_yellows
 from .units import ms_to_kmh
 from .visualization import Visuals
 
@@ -123,7 +123,10 @@ class Dashboard(Visuals):
 
         Rebuilds the controller's default plan and any per-node plans with the
         new durations, keeping each node's offset (phases jump at the moment of
-        change — a one-off transient, like re-programming real signals).
+        change — a one-off transient, like re-programming real signals). When
+        the signal system carries speed-scaled yellows (``yellow_braking``),
+        the slider value acts as the *floor* and the per-approach-speed scaling
+        is re-applied on top, so fast arterials keep their longer clearance.
         """
         controller = self._signal_controller()
         if controller is None:
@@ -135,6 +138,9 @@ class Dashboard(Visuals):
 
         controller.default_plan = retimed(controller.default_plan)
         controller.plans = {n: retimed(p) for n, p in controller.plans.items()}
+        braking = getattr(self.sim.signals, "yellow_braking", 0.0)
+        if braking > 0:
+            apply_speed_scaled_yellows(self.sim.signals, braking)
 
     # ----------------------------------------------------------------- panel
 

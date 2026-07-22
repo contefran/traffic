@@ -452,3 +452,49 @@ class SignalSystem:
             return True
         return self.controller.allows(
             node_id, self._orientation[edge_id], TurnType.STRAIGHT, t)
+
+
+def apply_speed_scaled_yellows(signals: SignalSystem,
+                               braking: float = 4.0) -> Dict[int, float]:
+    """Scale each signalized node's yellow with its fastest approach speed.
+
+    Kinematics: a driver who sees yellow at speed ``v`` needs ``v / (2*braking)``
+    seconds of clearance to stop at deceleration ``braking`` — so a *uniform*
+    yellow that is comfortable on 50 km/h locals is dilemma-zone territory on a
+    90 km/h arterial (the leader who stops must brake far beyond the rate the
+    follower's IDM gap was sized for, and gets rear-ended). Real practice (the
+    ITE formula) times yellow per approach speed; this applies the same rule
+    through the existing per-node :class:`SignalPlan` surface.
+
+    ``braking`` is the **tunable basis** [m/s^2]: the comfortable rate followers
+    plan gaps around (``Car.braking``'s default, 4.0) — *not* the physical
+    ``max_brake`` — so a stopping leader never has to exceed comfort. Lower
+    values mean longer yellows; ``braking <= 0`` disables (no-op). The
+    controller's default yellow acts as the **floor**, so slow streets keep it.
+
+    Each signalized node whose scaled yellow exceeds the floor gets its own
+    plan (green times and offset preserved from the plan it already had). The
+    basis is recorded as ``signals.yellow_braking`` so live re-timing (the
+    dashboard's yellow slider, which moves the floor) can re-apply the scaling.
+    Returns the ``{node_id: yellow}`` overrides that were installed.
+    """
+    signals.yellow_braking = braking
+    controller = signals.controller
+    if braking <= 0 or not hasattr(controller, "default_plan"):
+        return {}
+    floor = controller.default_plan.yellow
+    installed: Dict[int, float] = {}
+    for node in signals.net.nodes:
+        if not signals.is_signalized(node.id) or not node.in_edges:
+            continue
+        v = max(signals.net.edges[eid].speed_limit for eid in node.in_edges)
+        y = v / (2.0 * braking)
+        if y <= floor + 1e-9:
+            continue
+        base = controller.plan_for(node.id)
+        controller.set_plan(node.id, SignalPlan(base.green_times,
+                                                offset=base.offset, yellow=y))
+        installed[node.id] = y
+    return installed
+
+
