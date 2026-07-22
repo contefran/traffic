@@ -146,3 +146,21 @@ def test_deterministic_with_seed():
         return [(c.edge_id, round(c.s, 6), c.dest) for c in cars]
 
     assert run(5) == run(5)
+
+
+def test_invalidate_costs_picks_up_new_speed_limits():
+    # Cached cost tables must be refreshable when edge speed limits change
+    # (e.g. a training loop tuning speeds): before invalidation the router
+    # keeps quoting the old free-flow time, after it the new one.
+    net = build_grid_network(width=4, height=4, block=50.0)
+    router = ShortestPathRouter(net, seed=0)
+    origin, dest = net.node_id[(0, 0)], net.node_id[(3, 3)]
+
+    before = router.free_flow_time(origin, dest)
+    for e in net.edges:
+        e.speed_limit *= 2.0
+    assert router.free_flow_time(origin, dest) == before  # stale cache
+
+    router.invalidate_costs()
+    after = router.free_flow_time(origin, dest)
+    assert math.isclose(after, before / 2.0)
