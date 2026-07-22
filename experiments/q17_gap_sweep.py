@@ -60,22 +60,24 @@ def render(rows: List[dict], path: str = "experiments/figures/q17_gap_sweep.png"
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     x = [r["gap_scale"] for r in rows]
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(13.5, 4.0))
 
-    ax1.plot(x, [r["throughput_per_s"] for r in rows], "o-", color="tab:blue",
-             label="throughput [veh/s]")
-    ax1.set_xlabel("gap scale  (1.0 = human,  →0.2 = autonomous)")
-    ax1.set_ylabel("throughput [veh/s]", color="tab:blue")
-    axd = ax1.twinx()
-    axd.plot(x, [r["mean_delay_s"] for r in rows], "s--", color="tab:red",
-             label="mean delay [s]")
-    axd.set_ylabel("mean delay [s]", color="tab:red")
-    ax1.set_title("Throughput & delay vs gap acceptance")
+    ax1.plot(x, [r["throughput_per_s"] for r in rows], "o-", color="#1f77b4")
+    ax1.set_ylabel("throughput [veh/s]")
+    ax1.set_title("Throughput")
 
-    ax2.plot(x, [r["crashes"] for r in rows], "d-", color="0.3")
-    ax2.set_xlabel("gap scale  (1.0 = human,  →0.2 = autonomous)")
-    ax2.set_ylabel("crashes")
-    ax2.set_title("Crashes vs gap acceptance (guardrail)")
+    ax2.plot(x, [r["mean_delay_s"] for r in rows], "o-", color="#1f77b4")
+    ax2.set_ylabel("mean delay [s]")
+    ax2.set_title("Delay")
+
+    ax3.plot(x, [r["crashes"] for r in rows], "o-", color="0.3")
+    ax3.set_ylabel("crashes")
+    ax3.set_ylim(bottom=0)
+    ax3.set_title("Crashes (guardrail)")
+
+    for ax in (ax1, ax2, ax3):
+        ax.set_xlabel("gap scale  (1.0 = human,  →0.2 = autonomous)")
+        ax.spines[["top", "right"]].set_visible(False)
     fig.suptitle("Q17 — gap acceptance: human vs autonomous (unsignalized)")
     fig.tight_layout()
     fig.savefig(path, dpi=110, bbox_inches="tight")
