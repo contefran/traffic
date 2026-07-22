@@ -19,6 +19,7 @@ from .signals import (
     ProtectedPhaseController,
     SignalSystem,
     apply_speed_scaled_yellows,
+    apply_green_wave,
 )
 from .priority import PriorityModel
 from .left_turns import PermissiveLeftModel
@@ -56,6 +57,7 @@ __all__ = [
     "ProtectedPhaseController",
     "SignalSystem",
     "apply_speed_scaled_yellows",
+    "apply_green_wave",
     "PriorityModel",
     "PermissiveLeftModel",
     "LandUse",

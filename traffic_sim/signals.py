@@ -498,3 +498,53 @@ def apply_speed_scaled_yellows(signals: SignalSystem,
     return installed
 
 
+def apply_green_wave(signals: SignalSystem, *, speed: Optional[float] = None,
+                     orientation: Orientation = Orientation.HORIZONTAL
+                     ) -> Dict[int, float]:
+    """Stagger signal offsets so greens sweep along one axis (a green wave).
+
+    Classical coordination: a platoon released at one intersection should find
+    the next one turning green just as it arrives, so each node's schedule is
+    delayed by its distance along the wave axis divided by the progression
+    speed — ``offset = (x - x_min) / v`` for a horizontal wave (``y`` for a
+    vertical one). Since phase 0 is the ``orientation``-through phase in both
+    shipped controllers, the wave favours traffic moving toward *increasing*
+    coordinate (eastbound / northbound); the opposite direction gets the
+    corresponding anti-wave — the classical single-direction trade-off.
+
+    ``speed`` [m/s] fixes one progression speed for the whole city; the default
+    (``None``) uses each node's fastest approach of the wave orientation, so an
+    arterial row gets a wave timed to arterial speed and a local row to local
+    speed (each corridor is then self-consistent, because a row shares one
+    speed limit). Green times and yellows are preserved from the plan each node
+    already had, so this composes with :func:`apply_speed_scaled_yellows` in
+    either order. This is the classical baseline a learned offset policy has
+    to beat. Returns the ``{node_id: offset}`` values installed.
+    """
+    controller = signals.controller
+    if not hasattr(controller, "plan_for"):
+        return {}
+    net = signals.net
+    along = (lambda nd: nd.x) if orientation is Orientation.HORIZONTAL \
+        else (lambda nd: nd.y)
+    nodes = [nd for nd in net.nodes if signals.is_signalized(nd.id)]
+    if not nodes:
+        return {}
+    start = min(along(nd) for nd in nodes)
+    installed: Dict[int, float] = {}
+    for nd in nodes:
+        v = speed
+        if v is None:
+            approaches = [net.edges[eid].speed_limit for eid in nd.in_edges
+                          if signals._orientation[eid] is orientation]
+            if not approaches:
+                continue  # defensive: signalized nodes mix both orientations
+            v = max(approaches)
+        offset = (along(nd) - start) / v
+        base = controller.plan_for(nd.id)
+        controller.set_plan(nd.id, SignalPlan(base.green_times, offset=offset,
+                                              yellow=base.yellow))
+        installed[nd.id] = offset
+    return installed
+
+
