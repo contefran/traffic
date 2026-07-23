@@ -33,6 +33,7 @@ Run (from the repo root)::
 import argparse
 import json
 import math
+import random
 from pathlib import Path
 
 import numpy as np
@@ -104,29 +105,47 @@ def run_day(cars: int, car_seed: int, bin_s: float = 10.0, **overrides) -> dict:
 
 
 def _write_run(out_dir: str, cars: int, car_seed: int, bin_s: float,
-               overrides: dict) -> dict:
+               intensity: float, overrides: dict) -> dict:
     """Worker: simulate one day, save its ``.npz``, return a manifest row."""
-    data = run_day(cars, car_seed, bin_s, **overrides)
+    data = run_day(cars, car_seed, bin_s, intensity=intensity, **overrides)
     crashes = int(data.pop("crashes"))
     trips = int(data.pop("trips_completed"))
     name = f"run_cars{cars}_seed{car_seed}.npz"
     np.savez_compressed(Path(out_dir) / name, **data)
     return {"file": name, "cars": cars, "car_seed": car_seed,
-            "crashes": crashes, "trips_completed": trips}
+            "intensity": intensity, "crashes": crashes,
+            "trips_completed": trips}
+
+
+def _day_intensity(cars: int, car_seed: int, lo: float, hi: float) -> float:
+    """The day's demand intensity: uniform in ``[lo, hi]``, seeded per run.
+
+    This is the *unpredictable-but-observable* day-to-day variation (busy
+    Mondays, quiet Sundays) that makes medium-horizon forecasting a real
+    problem. It is recorded in the manifest for analysis, but a model must
+    never receive it as a feature — in reality you learn how busy today is by
+    watching the streets, which is exactly what the model should do.
+    """
+    return random.Random(car_seed * 100003 + cars).uniform(lo, hi)
 
 
 def generate(out_dir, loads=(300, 600, 1000, 1400), seeds=(1, 2, 3),
-             bin_s: float = 10.0, workers=None, **overrides) -> dict:
+             bin_s: float = 10.0, workers=None,
+             intensity_range=(1.0, 1.0), **overrides) -> dict:
     """Run the ``loads x seeds`` sweep and write the dataset to ``out_dir``.
 
     One ``.npz`` per (load, seed) day plus a ``manifest.json`` recording the
-    sweep configuration and per-run sanity stats. Runs fan out over processes
-    via :func:`experiments.common.pmap` (``workers=1`` runs in-process, handy
-    under pytest). Returns the manifest dict.
+    sweep configuration and per-run sanity stats. ``intensity_range=(lo, hi)``
+    draws each day's demand intensity uniformly (seeded per run); the default
+    ``(1.0, 1.0)`` keeps every day at full, identical demand. Runs fan out
+    over processes via :func:`experiments.common.pmap` (``workers=1`` runs
+    in-process, handy under pytest). Returns the manifest dict.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    jobs = [(str(out), cars, seed, bin_s, overrides)
+    lo, hi = intensity_range
+    jobs = [(str(out), cars, seed, bin_s, _day_intensity(cars, seed, lo, hi),
+             overrides)
             for cars in loads for seed in seeds]
     rows = pmap(_write_run, jobs, workers)
 
@@ -140,6 +159,7 @@ def generate(out_dir, loads=(300, 600, 1000, 1400), seeds=(1, 2, 3),
         "day_length": args.day_length,
         "loads": list(loads),
         "seeds": list(seeds),
+        "intensity_range": list(intensity_range),
         "overrides": overrides,
         "zone_codes": {use.name: k for use, k in ZONE_CODES.items()},
         "runs": rows,
@@ -162,12 +182,18 @@ def main(argv=None) -> None:
                    help="aggregation bin [s] for the per-edge series")
     p.add_argument("--workers", type=int, default=None,
                    help="worker processes (default: one per CPU)")
+    p.add_argument("--intensity-range", type=float, nargs=2, default=(1.0, 1.0),
+                   metavar=("LO", "HI"),
+                   help="per-day demand intensity drawn uniformly from "
+                        "[LO, HI] (seeded per run); 1 1 = identical full-"
+                        "demand days")
     args = p.parse_args(argv)
     manifest = generate(args.out, loads=args.cars, seeds=args.seeds,
-                        bin_s=args.bin_s, workers=args.workers)
+                        bin_s=args.bin_s, workers=args.workers,
+                        intensity_range=tuple(args.intensity_range))
     for row in manifest["runs"]:
-        print(f"  {row['file']}: {row['trips_completed']} trips, "
-              f"{row['crashes']} crashes")
+        print(f"  {row['file']}: intensity {row['intensity']:.2f}, "
+              f"{row['trips_completed']} trips, {row['crashes']} crashes")
     print(f"wrote {len(manifest['runs'])} runs to {args.out}")
 
 

@@ -50,6 +50,25 @@ def test_prediction_respects_physical_bounds():
     assert (pred <= 15.0 + 1e-6).all()
 
 
+def test_counts_target_learns_and_stays_nonnegative():
+    # Same constant-per-day construction, but the truth lives in the counts
+    # channel: occupancy is constant per edge per day, so the lagged count
+    # must predict it near-exactly on an unseen day.
+    train, test = [], _fake_run([5.0] * 5)
+    for k, base in enumerate((0.5, 2.0)):
+        r = _fake_run([5.0] * 5)
+        r["counts"] = np.full_like(r["counts"], base + k)
+        train.append(r)
+    test["counts"] = np.full_like(test["counts"], 1.7)
+
+    model = LinearFlowModel(horizon_bins=2, day_length=150.0, lags=2,
+                            ridge=1e-6, target="counts").fit(train)
+    pred = model.predict_day(test)
+    scored = model._valid_bins(test)
+    assert np.abs(pred[scored] - 1.7).mean() < 0.05
+    assert (pred >= 0.0).all()
+
+
 def test_end_to_end_on_tiny_dataset(tmp_path):
     tiny = dict(width=8, height=8, day_length=30.0,
                 grade=False, ring=False, roundabouts=0,

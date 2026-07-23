@@ -178,6 +178,11 @@ def build_parser() -> argparse.ArgumentParser:
     demand.add_argument("--schedule", action=argparse.BooleanOptionalAction, default=True,
                         help="per-car activity plans (home->work->maybe out->home), "
                              "computed for the whole day and executed from midnight")
+    demand.add_argument("--intensity", type=float, default=1.0,
+                        help="per-day demand intensity in [0,1]: each car "
+                             "commutes today with this probability (else a day "
+                             "off at home) and optional stops scale with it; "
+                             "1.0 = every day identical (the old behaviour)")
     demand.add_argument("--work-scale", type=float, default=400.0,
                         help="Gaussian home->work distance scale [m]: people take "
                              "jobs near home (smaller = shorter commutes). A key knob "
@@ -291,7 +296,8 @@ def build_simulation(args):
     if args.schedule:
         venues = assign_venues(net, zones, seed=args.seed)
         schedule = ActivitySchedule(venues, day_length=args.day_length,
-                                    seed=args.car_seed, work_scale=args.work_scale)
+                                    seed=args.car_seed, work_scale=args.work_scale,
+                                    intensity=args.intensity)
         schedule.assign(cars, net, zones)
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)

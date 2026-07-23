@@ -122,6 +122,17 @@ def evaluate_forecast(pred, target, counts, speed_limit, horizon_bins):
     }
 
 
+def evaluate_occupancy(pred, target, horizon_bins):
+    """MAE [cars/street] of an occupancy forecast.
+
+    Counts are defined everywhere (0 = genuinely empty), so unlike
+    :func:`evaluate_forecast` there is nothing to mask — only the warm-up
+    bins before ``horizon_bins`` are excluded, identically for every method.
+    """
+    err = np.abs(pred - target)[horizon_bins:]
+    return {"mae_cars": float(err.mean()), "cells": int(err.size)}
+
+
 def run(data_dir, horizon_s=60.0, test_seeds=(3,)):
     """Score both baselines on the held-out days of ``data_dir``'s dataset.
 
