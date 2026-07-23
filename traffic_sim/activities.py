@@ -107,18 +107,31 @@ class ActivitySchedule:
     """Per-car daily itineraries (see module docs)."""
 
     def __init__(self, venues: Venues, *, day_length: float = 600.0,
-                 seed: int = 0, work_scale: float = 400.0) -> None:
+                 seed: int = 0, work_scale: float = 400.0,
+                 intensity: float = 1.0) -> None:
         """``venues`` supplies the restaurant/gym/pub pools; ``day_length`` is the
         simulated seconds in a day (plan times are placed on it). ``work_scale``
         [m] is the Gaussian distance scale for choosing a workplace **near home**
         — people cluster their home and job in a big city, so a job is picked with
         probability ``exp(-d²/2·work_scale²)`` in the home→office distance ``d``,
         which keeps commutes realistic instead of criss-crossing the whole map.
-        Seeded so every car's plan is reproducible."""
+        Seeded so every car's plan is reproducible.
+
+        ``intensity`` in [0, 1] is the **day's demand intensity** — the knob that
+        makes one simulated day busier or quieter than another (weekday vs.
+        holiday, weather). Each car commutes today with probability
+        ``intensity`` (else it stays home all day — a day off / remote work) and
+        the optional-stop probabilities (lunch out, gym, dining, pubs) scale by
+        it too. The default ``1.0`` reproduces the previous behaviour *exactly*
+        (same RNG stream: the participation draw only happens when
+        ``intensity < 1``)."""
+        if not 0.0 <= intensity <= 1.0:
+            raise ValueError("intensity must be in [0, 1]")
         self.venues = venues
         self.day_length = day_length
         self.rng = random.Random(seed)
         self.work_scale = work_scale
+        self.intensity = intensity
         self.net = None   # set in :meth:`assign`
 
     # ---- helpers -------------------------------------------------------------
@@ -157,21 +170,21 @@ class ActivitySchedule:
         wake = rng.triangular(5.0, 9.5, 7.0)          # wakes ~07:00, some outliers
         legs.append((wake + rng.uniform(0.5, 1.0), car.work, work_frac, ActivityKind.WORK))
 
-        if rng.random() < P_LUNCH_OUT:                # an hour out for lunch
+        if rng.random() < P_LUNCH_OUT * self.intensity:   # an hour out for lunch
             lunch = rng.uniform(12.0, 13.0)
             legs.append((lunch, lunch_rest, self._frac(), ActivityKind.LUNCH))
             legs.append((lunch + rng.uniform(0.75, 1.25), car.work, work_frac,
                          ActivityKind.WORK))
 
         t = rng.triangular(16.5, 19.0, 17.5)          # leaves work (maybe late)
-        if rng.random() < P_GYM:
+        if rng.random() < P_GYM * self.intensity:
             legs.append((t, rng.choice(self.venues.gyms), self._frac(), ActivityKind.GYM))
             t += rng.uniform(1.0, 1.5)
-        if rng.random() < P_DINE_OUT:
+        if rng.random() < P_DINE_OUT * self.intensity:
             legs.append((t, rng.choice(self.venues.restaurants), self._frac(),
                          ActivityKind.DINE))
             t += rng.uniform(1.0, 1.5)
-        if rng.random() < P_PUB:
+        if rng.random() < P_PUB * self.intensity:
             t = max(t, rng.uniform(20.0, 22.0))       # pubs get going later
             legs.append((t, rng.choice(self.venues.pubs), self._frac(), ActivityKind.PUB))
             t += rng.uniform(1.0, 2.0)
@@ -200,6 +213,22 @@ class ActivitySchedule:
         nxt = plan[(idx + 1) % len(plan)]
         car.wake_t = self._next_time(nxt.depart, 0.0)
 
+    def _place_home_asleep(self, car) -> None:
+        """A non-commuting day: parked at home all day, never waking.
+
+        The car keeps no plan (``plan = []``) and ``wake_t = inf``, so the
+        wake pass skips it forever — it exists on its street (a parked car)
+        but contributes no trips today.
+        """
+        edge = self.net.edges[car.home]
+        car.edge_id, car.lane = car.home, 0
+        car.s = self._frac() * edge.length
+        car.v = 0.0
+        car.active = False
+        car.plan, car.plan_idx = [], 0
+        car.dest = car.dest_edge = car.next_edge = None
+        car.wake_t = math.inf
+
     # ---- setup + runtime -----------------------------------------------------
 
     def _pick_work(self, car, offices, office_mid) -> int:
@@ -220,6 +249,11 @@ class ActivitySchedule:
         offices = edges_by_zone(zones).get(LandUse.OFFICE) or list(zones) or [0]
         office_mid = {e: _edge_mid(net, e) for e in offices}
         for car in cars:
+            # Day-off draw only when intensity < 1, so the default keeps the
+            # exact RNG stream (and thus reproduces previous runs bit-for-bit).
+            if self.intensity < 1.0 and self.rng.random() >= self.intensity:
+                self._place_home_asleep(car)
+                continue
             car.work = self._pick_work(car, offices, office_mid)
             car.plan = self._make_plan(car)
             self._place_at_midnight(car)

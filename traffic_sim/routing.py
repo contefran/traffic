@@ -135,6 +135,17 @@ class ShortestPathRouter:
         self._dist_cache[dest] = dist
         return dist
 
+    def invalidate_costs(self) -> None:
+        """Drop the cached cost tables after edge speed limits change.
+
+        The per-destination Dijkstra tables assume the network is static; if an
+        experiment (or a training loop tuning speed limits) mutates
+        ``Edge.speed_limit``, call this so subsequent routing decisions and
+        :meth:`free_flow_time` baselines are computed from the new speeds.
+        Tables are rebuilt lazily on demand, so this is cheap by itself.
+        """
+        self._dist_cache.clear()
+
     def free_flow_time(self, origin: int, dest: int) -> float:
         """Ideal (uncongested) travel time [s] from ``origin`` node to ``dest``.
 

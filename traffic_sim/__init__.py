@@ -19,6 +19,7 @@ from .signals import (
     ProtectedPhaseController,
     SignalSystem,
     apply_speed_scaled_yellows,
+    apply_green_wave,
 )
 from .priority import PriorityModel
 from .left_turns import PermissiveLeftModel
@@ -31,6 +32,7 @@ from .schedule import DailySchedule
 from .activities import (ActivitySchedule, ActivityKind, Activity, Venues,
                          assign_venues)
 from .metrics import MetricsCollector, StepMetrics, TripMetrics
+from .tuning import ParameterSpace
 from .units import kmh_to_ms, ms_to_kmh
 
 __all__ = [
@@ -55,6 +57,7 @@ __all__ = [
     "ProtectedPhaseController",
     "SignalSystem",
     "apply_speed_scaled_yellows",
+    "apply_green_wave",
     "PriorityModel",
     "PermissiveLeftModel",
     "LandUse",
@@ -76,6 +79,7 @@ __all__ = [
     "MetricsCollector",
     "StepMetrics",
     "TripMetrics",
+    "ParameterSpace",
     "kmh_to_ms",
     "ms_to_kmh",
     "Visuals",

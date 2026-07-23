@@ -25,6 +25,7 @@ from traffic_sim import (
     PriorityModel,
     PermissiveLeftModel,
     apply_speed_scaled_yellows,
+    apply_green_wave,
     assign_zones,
     apply_zone_speeds,
     add_grade_separated,
@@ -177,6 +178,11 @@ def build_parser() -> argparse.ArgumentParser:
     demand.add_argument("--schedule", action=argparse.BooleanOptionalAction, default=True,
                         help="per-car activity plans (home->work->maybe out->home), "
                              "computed for the whole day and executed from midnight")
+    demand.add_argument("--intensity", type=float, default=1.0,
+                        help="per-day demand intensity in [0,1]: each car "
+                             "commutes today with this probability (else a day "
+                             "off at home) and optional stops scale with it; "
+                             "1.0 = every day identical (the old behaviour)")
     demand.add_argument("--work-scale", type=float, default=400.0,
                         help="Gaussian home->work distance scale [m]: people take "
                              "jobs near home (smaller = shorter commutes). A key knob "
@@ -207,6 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
                               "truck), which only bites above ~70 km/h; 4.0 "
                               "(comfortable braking) removes dilemma-zone "
                               "crashes entirely but costs real capacity")
+    control.add_argument("--green-wave", action=argparse.BooleanOptionalAction,
+                         default=False,
+                         help="stagger signal offsets along x so greens sweep "
+                              "eastward at each corridor's approach speed (the "
+                              "classical coordination baseline)")
     control.add_argument("--priority", action=argparse.BooleanOptionalAction,
                          default=True,
                          help="right-of-way at unsignalized nodes")
@@ -285,7 +296,8 @@ def build_simulation(args):
     if args.schedule:
         venues = assign_venues(net, zones, seed=args.seed)
         schedule = ActivitySchedule(venues, day_length=args.day_length,
-                                    seed=args.car_seed, work_scale=args.work_scale)
+                                    seed=args.car_seed, work_scale=args.work_scale,
+                                    intensity=args.intensity)
         schedule.assign(cars, net, zones)
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)
@@ -311,6 +323,10 @@ def build_simulation(args):
     # comfortable rate follower gaps assume, and gets rear-ended). Scale each
     # node's yellow with its fastest approach speed, --yellow as the floor.
     apply_speed_scaled_yellows(signals, braking=args.yellow_braking)
+    # Optional classical coordination baseline: offsets staggered along x so
+    # greens sweep eastward (preserves the speed-scaled yellows above).
+    if args.green_wave:
+        apply_green_wave(signals)
     # Priority gives right-of-way to traffic already on a "circulating" road over
     # traffic trying to join it: roundabout ring edges *and* the elevated highway
     # mainline (so on-ramp traffic yields to the highway and the highway never
