@@ -7,7 +7,12 @@ from ml.linear import LinearFlowModel, run
 
 
 def _fake_run(const_speeds, n_bins=30, bin_s=5.0):
-    """A synthetic day where every edge holds one constant speed all day."""
+    """A synthetic day where every edge holds one constant speed all day.
+
+    Topology is a simple one-way chain (edge e runs node e -> e+1), so the
+    neighbour features are well-defined: each edge's feeder is the previous
+    chain link, its receiver the next.
+    """
     n_edges = len(const_speeds)
     speed = np.tile(np.asarray(const_speeds, float), (n_bins, 1))
     return {
@@ -19,6 +24,8 @@ def _fake_run(const_speeds, n_bins=30, bin_s=5.0):
         "edge_lanes": np.ones(n_edges, np.int16),
         "edge_level": np.zeros(n_edges, np.int16),
         "edge_zone": np.zeros(n_edges, np.int16),
+        "edge_u": np.arange(n_edges, dtype=np.int32),
+        "edge_v": np.arange(1, n_edges + 1, dtype=np.int32),
     }
 
 
@@ -80,3 +87,35 @@ def test_end_to_end_on_tiny_dataset(tmp_path):
     for r in rows:
         assert np.isfinite(r["mae_kmh"]) and r["cells"] > 0
     assert model.w is not None
+
+
+def test_neighbour_features_follow_topology():
+    # A 4-link chain (0->1->2->3->4): edge 1's only feeder is edge 0, its
+    # only receiver edge 2; the chain ends fall back to free flow / empty.
+    run_ = _fake_run([4.0, 6.0, 8.0, 10.0])
+    run_["counts"] = np.tile(np.array([1.0, 2.0, 3.0, 4.0], np.float32),
+                             (run_["counts"].shape[0], 1))
+    model = LinearFlowModel(horizon_bins=1, day_length=150.0, lags=1)
+    model.clim = np.zeros_like(run_["speed"])  # unused by the helper
+    nb = model._neighbour_feats(run_, b=5)
+    up_speed, up_cnt, up_max, dn_speed, dn_cnt, dn_max = nb.T
+    assert np.allclose(up_speed, [15.0, 4.0, 6.0, 8.0])   # edge 0: no feeder
+    assert np.allclose(up_cnt, [0.0, 1.0, 2.0, 3.0])
+    assert np.allclose(up_max, up_cnt)                    # single feeders
+    assert np.allclose(dn_speed, [6.0, 8.0, 10.0, 15.0])  # edge 3: no receiver
+    assert np.allclose(dn_cnt, [2.0, 3.0, 4.0, 0.0])
+
+
+def test_neighbour_features_exclude_reverse_edge():
+    # A single two-way street (edges 0: A->B and 1: B->A) has no *genuine*
+    # neighbours — each edge's only feeder/receiver is its own reverse, which
+    # must not count as upstream/downstream traffic.
+    run_ = _fake_run([4.0, 6.0])
+    run_["edge_u"] = np.array([0, 1], np.int32)
+    run_["edge_v"] = np.array([1, 0], np.int32)
+    model = LinearFlowModel(horizon_bins=1, day_length=150.0, lags=1)
+    nb = model._neighbour_feats(run_, b=5)
+    assert np.allclose(nb[:, 0], 15.0)   # upstream speed -> free-flow fallback
+    assert np.allclose(nb[:, 1], 0.0)    # upstream count -> empty
+    assert np.allclose(nb[:, 3], 15.0)   # downstream speed
+    assert np.allclose(nb[:, 4], 0.0)    # downstream count

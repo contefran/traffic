@@ -123,7 +123,7 @@ class GBDTFlowModel(LinearFlowModel):
     """Boosted trees over the exact feature pipeline of the linear model."""
 
     def __init__(self, horizon_bins: int, day_length: float, *,
-                 lags: int = 3, target: str = "speed",
+                 lags: int = 3, target: str = "speed", neighbours: bool = True,
                  n_trees: int = 300, learning_rate: float = 0.1,
                  max_depth: int = 5, min_leaf: int = 50,
                  subsample: float = 0.5, n_bins: int = 64,
@@ -133,7 +133,8 @@ class GBDTFlowModel(LinearFlowModel):
         ``n_trees`` is a ceiling; with validation days the actual count is
         chosen by early stopping (``patience`` trees without improvement).
         """
-        super().__init__(horizon_bins, day_length, lags=lags, target=target)
+        super().__init__(horizon_bins, day_length, lags=lags, target=target,
+                         neighbours=neighbours)
         self.n_trees = n_trees
         self.learning_rate = learning_rate
         self.max_depth = max_depth

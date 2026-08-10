@@ -51,7 +51,7 @@ class LinearFlowModel:
 
     def __init__(self, horizon_bins: int, day_length: float, *,
                  lags: int = 3, ridge: float = 1.0,
-                 target: str = "speed") -> None:
+                 target: str = "speed", neighbours: bool = True) -> None:
         """``horizon_bins`` is the forecast gap in bins; ``lags`` how many
         consecutive recent bins feed the model; ``ridge`` the regularization
         strength (on standardized features). ``day_length`` [s] sets the
@@ -59,6 +59,12 @@ class LinearFlowModel:
         predict — ``"speed"`` [m/s] or ``"counts"`` (occupancy, cars on the
         street); the input features are identical, only the fitted output
         (and its climatology feature and physical clamp) change.
+
+        ``neighbours`` adds upstream/downstream traffic features (a street's
+        feeder and receiver edges at the most recent bin): a queue backing up
+        from a jammed downstream street, or clearing from an emptying upstream
+        one, is information a street's *own* history cannot carry. Kept a flag
+        so the with/without contribution can be measured directly.
         """
         if target not in ("speed", "counts"):
             raise ValueError("target must be 'speed' or 'counts'")
@@ -67,10 +73,12 @@ class LinearFlowModel:
         self.ridge = ridge
         self.day_length = day_length
         self.target = target
+        self.neighbours = neighbours
         self.clim = None      # [n_bins, n_edges] training-day target means
         self.w = None         # fitted weights
         self._mu = None       # feature standardization
         self._sd = None
+        self._adj = None      # cached (up_src, up_dst, down_src, down_dst)
 
     # ------------------------------------------------------------- features
 
@@ -85,6 +93,68 @@ class LinearFlowModel:
             run["edge_lanes"].astype(float), (run["edge_level"] > 0).astype(float),
             onehot[:, :N_ZONES - 1],  # drop one column (redundant with bias)
         ])
+
+    def _adjacency(self, run):
+        """Upstream/downstream neighbour edge pairs, cached (topology is fixed
+        across runs — column ``e`` is the same street in every file).
+
+        Returns ``(up_src, up_dst, down_src, down_dst)``: parallel index
+        arrays where, for each ``dst`` edge, the matching ``src`` edges are its
+        *feeders* (edges ending at ``dst``'s start node) or *receivers* (edges
+        starting at ``dst``'s end node). The opposite direction of a two-way
+        street is excluded — it is the same road's oncoming lane, not a
+        genuinely different upstream/downstream street.
+        """
+        if self._adj is not None:
+            return self._adj
+        u, v = run["edge_u"], run["edge_v"]
+        n = len(u)
+        incoming, outgoing, loc = {}, {}, {}
+        for e in range(n):
+            incoming.setdefault(int(v[e]), []).append(e)
+            outgoing.setdefault(int(u[e]), []).append(e)
+            loc[(int(u[e]), int(v[e]))] = e
+        up_src, up_dst, dn_src, dn_dst = [], [], [], []
+        for e in range(n):
+            rev = loc.get((int(v[e]), int(u[e])), -1)
+            for f in incoming.get(int(u[e]), ()):     # f ends where e begins
+                if f != rev:
+                    up_src.append(f); up_dst.append(e)
+            for g in outgoing.get(int(v[e]), ()):     # g begins where e ends
+                if g != rev:
+                    dn_src.append(g); dn_dst.append(e)
+        self._adj = tuple(np.array(a, np.int64)
+                          for a in (up_src, up_dst, dn_src, dn_dst))
+        return self._adj
+
+    def _neighbour_feats(self, run, b):
+        """Neighbour traffic features for target bin ``b``, one row per edge.
+
+        Aggregates the feeder/receiver edges' state at the most recent input
+        bin (``b - horizon``): mean speed (empty → speed limit, as elsewhere),
+        mean occupancy, and *max* occupancy (a single jammed feeder is the
+        signal a mean would dilute). Edges with no neighbour of a given
+        direction fall back to free flow / empty.
+        """
+        up_src, up_dst, dn_src, dn_dst = self._adjacency(run)
+        n = run["speed"].shape[1]
+        limit = run["edge_speed_limit"].astype(float)
+        s = run["speed"][b - self.h]
+        spd = np.where(np.isnan(s), limit, s)
+        cnt = run["counts"][b - self.h]
+
+        def agg(src, dst):
+            deg = np.bincount(dst, minlength=n).astype(float)
+            has = deg > 0
+            spd_sum = np.bincount(dst, weights=spd[src], minlength=n)
+            cnt_sum = np.bincount(dst, weights=cnt[src], minlength=n)
+            cnt_max = np.zeros(n)
+            np.maximum.at(cnt_max, dst, cnt[src])
+            mean_spd = np.where(has, spd_sum / np.maximum(deg, 1.0), limit)
+            mean_cnt = np.where(has, cnt_sum / np.maximum(deg, 1.0), 0.0)
+            return [mean_spd, mean_cnt, cnt_max]
+
+        return np.column_stack(agg(up_src, up_dst) + agg(dn_src, dn_dst))
 
     def _features(self, run, bins) -> np.ndarray:
         """Feature matrix for every (bin in ``bins``) x (every edge).
@@ -116,7 +186,8 @@ class LinearFlowModel:
             angle = 2.0 * np.pi * t / self.day_length
             row_feats.append(np.full(n_edges, np.sin(angle)))
             row_feats.append(np.full(n_edges, np.cos(angle)))
-            cols.append(np.column_stack(row_feats + [static]))
+            extra = [self._neighbour_feats(run, b)] if self.neighbours else []
+            cols.append(np.column_stack(row_feats + [static] + extra))
         return np.concatenate(cols, axis=0)
 
     def _valid_bins(self, run) -> np.ndarray:
@@ -139,6 +210,10 @@ class LinearFlowModel:
                   "time (sin)", "time (cos)",
                   "speed limit", "street length", "lanes", "elevated"]
         names += [f"zone: {u.name.lower()}" for u in list(LandUse)[:N_ZONES - 1]]
+        if self.neighbours:
+            names += ["upstream speed", "upstream count", "upstream count (max)",
+                      "downstream speed", "downstream count",
+                      "downstream count (max)"]
         return names
 
     # ------------------------------------------------------------ fit/predict
