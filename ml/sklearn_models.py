@@ -58,7 +58,7 @@ class SKTreesFlowModel(LinearFlowModel):
     """Boosted trees via scikit-learn, early-stopped on whole validation days."""
 
     def __init__(self, horizon_bins: int, day_length: float, *,
-                 lags: int = 3, target: str = "speed",
+                 lags: int = 3, target: str = "speed", neighbours: bool = True,
                  max_trees: int = 400, step: int = 25,
                  learning_rate: float = 0.1, max_depth: int = 5,
                  patience_steps: int = 3, seed: int = 0) -> None:
@@ -66,7 +66,8 @@ class SKTreesFlowModel(LinearFlowModel):
         time and keeps the count that scored best on the validation days
         (stopping after ``patience_steps`` growth steps without improvement).
         """
-        super().__init__(horizon_bins, day_length, lags=lags, target=target)
+        super().__init__(horizon_bins, day_length, lags=lags, target=target,
+                         neighbours=neighbours)
         self.max_trees = max_trees
         self.step = step
         self.learning_rate = learning_rate
