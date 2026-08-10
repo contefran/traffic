@@ -48,5 +48,6 @@ docs/_build/
 guides_plans/
 experiments/figures/
 
-# Generated ML datasets
+# Generated ML datasets and fitted model bundles
 ml/data/
+ml/models/

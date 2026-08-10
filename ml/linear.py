@@ -226,8 +226,13 @@ class LinearFlowModel:
 
     def _prepare(self, train_runs) -> None:
         """Precompute the training-day aggregates the features depend on."""
-        self.clim = climatology([r[self.target] for r in train_runs],
-                                self._fallback(train_runs[0]))
+        clim = climatology([r[self.target] for r in train_runs],
+                           self._fallback(train_runs[0]))
+        self._n_bins = clim.shape[0]
+        # The day is periodic: append the first ``h`` bins so a target bin
+        # just past midnight (predict_next near the end of a day) still has a
+        # climatology row to index.
+        self.clim = np.vstack([clim, clim[:self.h]])
         self._city_cum = np.mean([np.cumsum(r["counts"].sum(axis=1))
                                   for r in train_runs], axis=0)
 
@@ -260,6 +265,44 @@ class LinearFlowModel:
         """Model output for a raw (unstandardized) feature matrix."""
         Xs = np.column_stack([np.ones(len(X)), (X - self._mu) / self._sd])
         return Xs @ self.w
+
+    def predict_next(self, history) -> np.ndarray:
+        """Per-edge prediction ``horizon`` ahead of the last observed bin —
+        the serving entry point.
+
+        ``history`` is a run-like dict holding *today so far, from midnight*:
+        ``speed`` and ``counts`` of shape ``[bins_so_far, n_edges]`` (speed
+        ``NaN`` where empty) plus the static edge arrays; ``bin_t`` may be
+        omitted (bins are assumed contiguous from midnight at the training
+        bin width). Needs at least ``lags`` observed bins.
+
+        Deliberately *not* a re-implementation: it pads the history with
+        ``h`` blank bins and calls the training feature pipeline
+        (:meth:`_features`) on the padded copy, so a served prediction is
+        computed from features built by exactly the code that built the
+        training matrix — the training–serving-skew trap closed by
+        construction.
+        """
+        speed, counts = history["speed"], history["counts"]
+        b_now = speed.shape[0] - 1
+        if b_now + 1 < self.lags:
+            raise ValueError(f"need at least {self.lags} observed bins")
+        if b_now >= self._n_bins:
+            raise ValueError("history longer than a training day — send "
+                             "today's bins only (from midnight)")
+        n_edges = speed.shape[1]
+        b = b_now + self.h                      # target bin index
+        bin_s = self.day_length / self._n_bins
+        run = dict(history)
+        run["speed"] = np.vstack(
+            [speed, np.full((self.h, n_edges), np.nan, speed.dtype)])
+        run["counts"] = np.vstack(
+            [counts, np.zeros((self.h, n_edges), counts.dtype)])
+        run["bin_t"] = np.arange(b + 1, dtype=np.float32) * bin_s
+        yhat = self._apply(self._features(run, np.array([b])))
+        upper = (run["edge_speed_limit"].astype(float)
+                 if self.target == "speed" else np.inf)
+        return np.clip(yhat, 0.0, upper)
 
     def predict_day(self, run) -> np.ndarray:
         """Predicted target ``[n_bins, n_edges]`` for one day.

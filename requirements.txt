@@ -2,3 +2,6 @@ numpy
 matplotlib
 pytest
 scikit-learn
+fastapi
+uvicorn[standard]
+httpx
