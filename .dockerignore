@@ -1,0 +1,14 @@
+# Keep the build context to what the Dockerfile actually COPYs: the two
+# Python packages and the model bundle. Everything else — the committed
+# virtualenv, datasets, figures, docs — would bloat the context upload.
+*
+!requirements-serve.txt
+!traffic_sim/**
+!ml/**
+
+# Within the allowed trees: no caches, no generated data, and only the
+# one bundle the image bakes in.
+**/__pycache__
+ml/data
+ml/models/*
+!ml/models/varied.joblib

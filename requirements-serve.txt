@@ -1,0 +1,15 @@
+# Runtime dependencies of the flow-forecast service (ml/serve.py) only —
+# no matplotlib, no pytest: the Docker image installs from this file, the
+# development virtualenv from requirements.txt.
+#
+# Versions are pinned to the ones the model bundle was fitted with: a
+# joblib bundle is a pickle, and unpickling scikit-learn estimators is
+# only guaranteed against the same library version (the bundle records it
+# in its metadata and /health reports it).
+numpy==2.5.0
+scipy==1.18.0
+scikit-learn==1.9.0
+joblib==1.5.3
+fastapi==0.141.1
+pydantic==2.13.4
+uvicorn==0.52.1
