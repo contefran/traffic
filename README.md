@@ -113,6 +113,30 @@ construction, and an end-to-end test pins it. The `Dockerfile` packages the
 service with serving-only dependencies pinned to the versions the bundle was
 fitted with.
 
+## Scope and limitations
+
+The trained model is deliberately **city-specific**. The dataset contract
+fixes the road network across all runs, so the model learns these 1646
+streets as individuals — its strongest feature is each street's own average
+day — and the served bundle is meaningless on any other map (the serving
+layer actually enforces this: geometry can only be attached to a bundle
+after the rebuilt city is validated against the stored network). What *does*
+carry over to any city running the same traffic dynamics: the entire
+pipeline (dataset → baselines → models → artifact → API → container reruns
+unchanged on a new map), and the qualitative findings — the ~1-minute decay
+of state information, climatology's dominance at medium horizons under
+periodic demand, demand revealing itself through occupancy rather than
+speed, queues preceding slowdowns. The numbers are this city's; the shape of
+the results is the traffic model's.
+
+The transferable version — a model trained on street *descriptions* (speed
+limit, length, lanes, land use, neighbour state) across many generated
+cities, rather than street *identities* in one — is the natural future-work
+direction (graph neural networks fit the road-graph structure directly), and
+the same distinction will apply to the reinforcement-learning phase: a
+timing plan for this city's intersections versus a policy any intersection
+could run.
+
 ## Running from source
 
 ```bash
