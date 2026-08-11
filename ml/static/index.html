@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traffic flow — live city map</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1d2026; --edge: #2c313a;
+    --text: #d7dbe2; --dim: #8a919c; --accent: #5b9bd5;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--edge);
+  }
+  header h1 { font-size: 15px; font-weight: 600; }
+  header .score { color: var(--dim); font-size: 12px; }
+  header .score b { color: var(--text); font-weight: 600; }
+  #controls { margin-left: auto; display: flex; gap: 10px; align-items: center;
+              font-size: 12.5px; }
+  select, button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer;
+  }
+  button:disabled, input:disabled { opacity: 0.4; cursor: default; }
+  #playBtn { width: 34px; }
+  #timeSlider { width: 180px; accent-color: var(--accent); }
+  #clock { font-variant-numeric: tabular-nums; min-width: 46px;
+           color: var(--text); font-weight: 600; }
+  main { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+           cursor: crosshair; }
+  #info {
+    position: absolute; top: 10px; right: 10px; width: 240px;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    border: 1px solid var(--edge); border-radius: 8px;
+    padding: 10px 12px; font-size: 12.5px; pointer-events: none;
+  }
+  #info h2 { font-size: 12.5px; color: var(--dim); font-weight: 600;
+             margin-bottom: 4px; }
+  #info table { width: 100%; border-collapse: collapse; color: var(--text); }
+  #info td { padding: 1px 0; }
+  #info td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  #legend {
+    position: absolute; bottom: 10px; left: 10px;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    border: 1px solid var(--edge); border-radius: 8px;
+    padding: 8px 12px; font-size: 12px; color: var(--dim);
+  }
+  #legend .row { display: flex; align-items: center; gap: 8px; }
+  #legend .swatch { width: 22px; height: 3px; border-radius: 2px; }
+  #note {
+    position: absolute; bottom: 10px; right: 10px; max-width: 320px;
+    color: var(--dim); font-size: 11.5px; text-align: right;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Traffic flow — simulated city</h1>
+  <span class="score" id="scorecard">loading…</span>
+  <div id="controls">
+    <select id="viewSel">
+      <option value="class">street class</option>
+      <option value="zones">land use</option>
+      <option value="obs_speed">observed speed</option>
+      <option value="fc_speed">forecast speed</option>
+      <option value="obs_counts">observed occupancy</option>
+      <option value="fc_counts">forecast occupancy</option>
+    </select>
+    <button id="playBtn" disabled>▶</button>
+    <input type="range" id="timeSlider" min="0" max="0" value="0" disabled>
+    <span id="clock">--:--</span>
+  </div>
+</header>
+<main>
+  <canvas id="map"></canvas>
+  <div id="info"><h2>Street</h2><em style="color:var(--dim)">hover the map</em></div>
+  <div id="legend"></div>
+  <div id="note"></div>
+</main>
+<script>
+"use strict";
+/* One page, four endpoints: /health (scorecard + which forecast cells
+   exist), /network (the drawable city), /demo/day (a recorded held-out
+   day to replay) and /predict (the model). Observed views recolour the
+   map from the recording; forecast views POST the day-so-far and colour
+   each street by what the model expects next. No build step, no
+   external libraries. */
+
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+const infoBox = document.getElementById("info");
+const viewSel = document.getElementById("viewSel");
+const playBtn = document.getElementById("playBtn");
+const slider = document.getElementById("timeSlider");
+const clockEl = document.getElementById("clock");
+const noteEl = document.getElementById("note");
+
+let net = null, demo = null, health = null;
+let view = null, hovered = null;
+let bin = 0, playing = false, timer = null, fetching = false;
+const forecasts = { speed: new Map(), counts: new Map() };  // bin -> preds
+const horizons = {};                                        // target -> s
+
+const ZONE_COLOURS = { RESIDENTIAL: "#4caf50", OFFICE: "#4a86e8",
+                       RETAIL: "#e8963a", OTHER: "#6b7280" };
+const UNZONED = "#565c66", EMPTY = "#3a3f47";
+const KMH = 3.6, TICK_MS = 400;
+
+function speedClass(e) {
+  if (e.level > 0) return "elevated";
+  if (e.speed_limit >= 16) return "arterial";   // >= ~60 km/h at ground
+  return "local";
+}
+const CLASS_STYLE = {
+  local:    { colour: "#7d8590", width: 1.0 },
+  arterial: { colour: "#5b9bd5", width: 1.8 },
+  elevated: { colour: "#c98a4b", width: 2.6 },
+};
+
+function zoneName(code) {
+  for (const [name, k] of Object.entries(net.zone_codes))
+    if (k === code) return name;
+  return null;
+}
+
+/* ---- colour ramps ------------------------------------------------- */
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function mix(c1, c2, t) {          // hex colour interpolation
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const [r1, g1, b1] = p(c1), [r2, g2, b2] = p(c2);
+  return `rgb(${lerp(r1, r2, t) | 0},${lerp(g1, g2, t) | 0},${lerp(b1, b2, t) | 0})`;
+}
+function speedColour(v, limit) {   // red (stopped) -> yellow -> green (free)
+  if (v == null) return EMPTY;
+  const r = Math.max(0, Math.min(1, v / limit));
+  return r < 0.5 ? mix("#d64545", "#e8c84b", r * 2)
+                 : mix("#e8c84b", "#3fae5a", (r - 0.5) * 2);
+}
+function densityColour(count, e) { // dim (empty) -> amber -> red (jammed)
+  if (count == null) return EMPTY;
+  const k = count / ((e.length / 1000) * e.lanes);   // veh / km / lane
+  if (k <= 2) return mix(EMPTY, "#8a8f98", k / 2);
+  if (k <= 15) return mix("#8a8f98", "#d9a441", (k - 2) / 13);
+  return mix("#d9a441", "#d64545", Math.min(1, (k - 15) / 25));
+}
+
+function edgeColour(e) {
+  const mode = viewSel.value;
+  if (mode === "class") return CLASS_STYLE[speedClass(e)].colour;
+  if (mode === "zones") {
+    if (e.level > 0) return CLASS_STYLE.elevated.colour;
+    const name = zoneName(e.zone);
+    return name ? (ZONE_COLOURS[name] || UNZONED) : UNZONED;
+  }
+  if (!demo) return EMPTY;
+  if (mode === "obs_speed")
+    return speedColour(demo.speed[bin][e.id], e.speed_limit);
+  if (mode === "obs_counts")
+    return densityColour(demo.counts[bin][e.id], e);
+  const target = mode === "fc_speed" ? "speed" : "counts";
+  const preds = forecasts[target].get(bin);
+  if (!preds) return EMPTY;                      // not fetched yet
+  return target === "speed" ? speedColour(preds[e.id], e.speed_limit)
+                            : densityColour(preds[e.id], e);
+}
+
+/* ---- geometry / drawing ------------------------------------------- */
+
+function fitView() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const b = net.bounds, pad = 24;
+  const s = Math.min((w - 2 * pad) / (b.x_max - b.x_min),
+                     (h - 2 * pad) / (b.y_max - b.y_min));
+  view = { s, dpr,
+           ox: (w - s * (b.x_max - b.x_min)) / 2 - s * b.x_min,
+           oy: (h + s * (b.y_max - b.y_min)) / 2 + s * b.y_min };
+}
+const sx = x => view.ox + view.s * x;
+const sy = y => view.oy - view.s * y;      // world y up, screen y down
+
+function draw() {
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  ctx.lineCap = "round";
+  for (const pass of [0, 1]) {             // ground first, elevated on top
+    for (const e of net.edges) {
+      if ((e.level > 0 ? 1 : 0) !== pass) continue;
+      ctx.strokeStyle = e === hovered ? "#ffffff" : edgeColour(e);
+      ctx.lineWidth = CLASS_STYLE[speedClass(e)].width + (e === hovered ? 1.2 : 0);
+      ctx.beginPath();
+      ctx.moveTo(sx(e.x1), sy(e.y1));
+      ctx.lineTo(sx(e.x2), sy(e.y2));
+      ctx.stroke();
+    }
+  }
+}
+
+function nearestEdge(px, py) {             // closest segment within 6 px
+  let best = null, bestD = 6;
+  for (const e of net.edges) {
+    const x1 = sx(e.x1), y1 = sy(e.y1), x2 = sx(e.x2), y2 = sy(e.y2);
+    const dx = x2 - x1, dy = y2 - y1;
+    const t = Math.max(0, Math.min(1,
+      ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy || 1)));
+    const d = Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  return best;
+}
+
+/* ---- panels -------------------------------------------------------- */
+
+function showInfo(e) {
+  if (!e) {
+    infoBox.innerHTML = "<h2>Street</h2><em style='color:var(--dim)'>hover the map</em>";
+    return;
+  }
+  const zone = zoneName(e.zone) || "unzoned";
+  let rows = `
+    <tr><td>class</td><td>${speedClass(e)}</td></tr>
+    <tr><td>speed limit</td><td>${Math.round(e.speed_limit * KMH)} km/h</td></tr>
+    <tr><td>length</td><td>${Math.round(e.length)} m</td></tr>
+    <tr><td>lanes</td><td>${e.lanes}</td></tr>
+    <tr><td>land use</td><td>${zone.toLowerCase()}</td></tr>`;
+  if (demo) {
+    const v = demo.speed[bin][e.id], c = demo.counts[bin][e.id];
+    rows += `
+    <tr><td>speed now</td><td>${v == null ? "—" : Math.round(v * KMH) + " km/h"}</td></tr>
+    <tr><td>cars now</td><td>${c.toFixed(1)}</td></tr>`;
+  }
+  infoBox.innerHTML = `<h2>Street #${e.id}</h2><table>${rows}</table>`;
+}
+
+function buildLegend() {
+  const ramp = (fn, labels) => labels.map(([label, col]) =>
+    `<div class="row"><span class="swatch" style="background:${col}"></span>${label}</div>`).join("");
+  const mode = viewSel.value;
+  let rows;
+  if (mode === "class")
+    rows = ramp(null, [["local street", CLASS_STYLE.local.colour],
+                       ["arterial", CLASS_STYLE.arterial.colour],
+                       ["elevated highway", CLASS_STYLE.elevated.colour]]);
+  else if (mode === "zones")
+    rows = ramp(null, [...Object.entries(ZONE_COLOURS).map(([n, c]) => [n.toLowerCase(), c]),
+                       ["unzoned (ramps, rings)", UNZONED],
+                       ["elevated", CLASS_STYLE.elevated.colour]]);
+  else if (mode.endsWith("speed"))
+    rows = ramp(null, [["at speed limit", "#3fae5a"], ["half", "#e8c84b"],
+                       ["stopped", "#d64545"], ["nobody driving", EMPTY]]);
+  else
+    rows = ramp(null, [["empty", EMPTY], ["light", "#8a8f98"],
+                       ["busy", "#d9a441"], ["jammed", "#d64545"]]);
+  document.getElementById("legend").innerHTML = rows;
+}
+
+function updateClock() {
+  if (!demo) return;
+  const frac = demo.bin_t[bin] / demo.day_length;
+  const mins = Math.round(frac * 24 * 60);
+  clockEl.textContent =
+    `${String(Math.floor(mins / 60) % 24).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+}
+
+/* ---- forecasts ------------------------------------------------------ */
+
+async function ensureForecast(target, b) {
+  const cache = forecasts[target];
+  if (cache.has(b) || fetching) return cache.has(b);
+  fetching = true;
+  try {
+    const resp = await fetch("predict", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target, horizon_s: horizons[target],
+        speed: demo.speed.slice(0, b + 1),
+        counts: demo.counts.slice(0, b + 1),
+      }),
+    });
+    cache.set(b, resp.ok ? (await resp.json()).predictions : null);
+  } finally { fetching = false; }
+  return true;
+}
+
+/* ---- playback ------------------------------------------------------- */
+
+async function setBin(b, redraw = true) {
+  bin = Math.max(0, Math.min(demo.n_bins - 1, b));
+  slider.value = bin;
+  updateClock();
+  const mode = viewSel.value;
+  if (mode.startsWith("fc_")) {
+    const target = mode === "fc_speed" ? "speed" : "counts";
+    await ensureForecast(target, bin);
+  }
+  if (redraw) { showInfo(hovered); draw(); }
+}
+
+function play(on) {
+  playing = on;
+  playBtn.textContent = on ? "❚❚" : "▶";
+  clearInterval(timer);
+  if (on) timer = setInterval(async () => {
+    if (fetching) return;                        // wait for the model
+    await setBin(bin + 1 >= demo.n_bins ? 0 : bin + 1);
+  }, TICK_MS);
+}
+
+/* ---- events --------------------------------------------------------- */
+
+canvas.addEventListener("mousemove", ev => {
+  const r = canvas.getBoundingClientRect();
+  const e = nearestEdge(ev.clientX - r.left, ev.clientY - r.top);
+  if (e !== hovered) { hovered = e; showInfo(e); draw(); }
+});
+canvas.addEventListener("mouseleave", () => {
+  if (hovered) { hovered = null; showInfo(null); draw(); }
+});
+viewSel.addEventListener("change", async () => {
+  buildLegend();
+  if (demo) await setBin(bin, false);
+  draw();
+});
+playBtn.addEventListener("click", () => play(!playing));
+slider.addEventListener("input", async () => {
+  play(false);
+  await setBin(+slider.value);
+});
+window.addEventListener("resize", () => { if (net) { fitView(); draw(); } });
+
+// Shareable links: "?zones" preselects land use; "?view=fc_speed&bin=45"
+// opens any view at any moment of the day.
+const qp = new URLSearchParams(location.search);
+if (qp.has("zones")) viewSel.value = "zones";
+if (qp.get("view")) viewSel.value = qp.get("view");
+
+/* ---- boot ----------------------------------------------------------- */
+
+async function boot() {
+  health = await (await fetch("health")).json();
+  for (const c of health.cells) horizons[c.target] = c.horizon_s;
+  const cells = health.cells.map(c =>
+    `<b>${c.target}@${c.horizon_s}s</b> MAE ${c.test_mae.toFixed(c.target === "speed" ? 1 : 3)} ${c.mae_unit}`
+  ).join(" · ");
+  document.getElementById("scorecard").innerHTML =
+    `${health.n_edges} streets · held-out test: ${cells}`;
+
+  net = await (await fetch("network")).json();
+  fitView(); buildLegend(); draw();
+
+  const r = await fetch("demo/day");
+  if (r.ok) {
+    demo = await r.json();
+    slider.max = demo.n_bins - 1;
+    slider.disabled = playBtn.disabled = false;
+    noteEl.textContent = "replaying a held-out day the model never trained "
+      + "on — forecast views query the live model each step";
+    await setBin(+(qp.get("bin") || 0));
+  } else {
+    noteEl.textContent = "no demo day on the server — observed/forecast "
+      + "views disabled (static map only)";
+  }
+}
+boot();
+</script>
+</body>
+</html>

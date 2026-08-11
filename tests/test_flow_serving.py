@@ -5,11 +5,14 @@ bit-identical to what the in-memory model computes — save/load and the web
 layer add zero drift (the training–serving-skew guarantee).
 """
 
+import math
+from pathlib import Path
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from ml.artifact import cell_key, fit_bundle, load, save
+from ml.artifact import attach_geometry, cell_key, fit_bundle, load, save
 from ml.baselines import load_runs, split_runs
 from ml.dataset import generate
 from ml.serve import create_app
@@ -107,3 +110,80 @@ def test_api_rejects_bad_requests(bundle_env):
                                       "speed": [[0.0, 1.0]] * 5,
                                       "counts": [[0.0, 1.0]] * 5})
     assert r.status_code == 400                       # wrong edge count
+
+
+def test_network_endpoint_serves_drawable_geometry(bundle_env):
+    bundle, path, day, manifest = bundle_env
+    client = TestClient(create_app(str(path)))
+    r = client.get("/network")
+    assert r.status_code == 200
+    net = r.json()
+    assert net["n_edges"] == day["speed"].shape[1] == len(net["edges"])
+    assert set(net["zone_codes"]) == set(manifest["zone_codes"])
+    b = net["bounds"]
+    assert b["x_min"] < b["x_max"] and b["y_min"] < b["y_max"]
+    # Streets are straight segments between their endpoint nodes, so the
+    # drawn length must reproduce the stored street length.
+    for e in net["edges"]:
+        drawn = math.hypot(e["x2"] - e["x1"], e["y2"] - e["y1"])
+        assert drawn == pytest.approx(e["length"], rel=1e-3, abs=0.02)
+
+
+def test_attach_geometry_rejects_wrong_city(bundle_env):
+    from traffic_sim.network import build_grid_network
+
+    bundle, _, _, _ = bundle_env
+    with pytest.raises(ValueError, match="network mismatch"):
+        attach_geometry(bundle, net=build_grid_network(3, 3, 100.0))
+
+
+def test_index_serves_frontend_page(bundle_env):
+    _, path, _, _ = bundle_env
+    client = TestClient(create_app(str(path)))
+    r = client.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    # The page is a client of the JSON endpoints it draws from.
+    assert "canvas" in r.text and "network" in r.text
+    assert "health" in r.text and "demo/day" in r.text
+
+
+def test_demo_day_replay_payload(bundle_env):
+    bundle, path, day, manifest = bundle_env
+    npz = Path(bundle["meta"]["data_dir"]) / manifest["runs"][0]["file"]
+    client = TestClient(create_app(str(path), demo_day=str(npz)))
+    d = client.get("/demo/day").json()
+    assert d["n_bins"] == len(d["speed"]) == len(d["counts"]) > 0
+    assert len(d["speed"][0]) == bundle["meta"]["n_edges"]
+    # NaN (nobody drove) must survive the JSON trip as null, distinct
+    # from 0 (standing traffic).
+    assert any(x is None for row in d["speed"] for x in row)
+    assert all(x is not None for row in d["counts"] for x in row)
+    # The payload must round-trip straight back into /predict.
+    b_now = 4
+    r = client.post("/predict", json={
+        "target": "speed", "horizon_s": 5.0,
+        "speed": d["speed"][:b_now + 1], "counts": d["counts"][:b_now + 1]})
+    assert r.status_code == 200
+
+
+def test_demo_day_404_when_missing(bundle_env, tmp_path):
+    _, path, _, _ = bundle_env
+    client = TestClient(create_app(str(path),
+                                   demo_day=str(tmp_path / "nope.npz")))
+    r = client.get("/demo/day")
+    assert r.status_code == 404
+    assert "FLOW_DEMO_DAY" in r.json()["detail"]
+
+
+def test_network_404_without_geometry(bundle_env, tmp_path):
+    bundle, _, _, _ = bundle_env
+    bare = {**bundle,
+            "statics": {k: v for k, v in bundle["statics"].items()
+                        if not k.startswith("node_")}}
+    p = tmp_path / "bare.joblib"
+    save(bare, p)
+    client = TestClient(create_app(str(p)))
+    r = client.get("/network")
+    assert r.status_code == 404
+    assert "attach-geometry" in r.json()["detail"]

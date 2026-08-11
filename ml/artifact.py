@@ -44,6 +44,54 @@ STATIC_KEYS = ("edge_speed_limit", "edge_length", "edge_lanes", "edge_level",
                "edge_zone", "edge_u", "edge_v")
 
 
+def geometry_statics(net) -> dict:
+    """Per-node world coordinates, keyed like the other static arrays.
+
+    With ``edge_u``/``edge_v`` already in the bundle, node coordinates are
+    all a frontend needs to draw every street as a segment — the network's
+    edges are straight lines between their endpoint nodes by construction
+    (:meth:`RoadNetwork.point_on_edge` interpolates linearly).
+    """
+    return {
+        "node_x": np.array([n.x for n in net.nodes], np.float32),
+        "node_y": np.array([n.y for n in net.nodes], np.float32),
+        "node_level": np.array([n.level for n in net.nodes], np.int16),
+    }
+
+
+def attach_geometry(bundle: dict, net=None) -> dict:
+    """Attach street-map geometry to a bundle (in place; returns it).
+
+    The dataset contract fixes the network across runs, so the city can be
+    rebuilt deterministically (``meta["overrides"]`` records any non-default
+    builder flags; older bundles imply the default city) and its coordinates
+    attached after the fact — no refit, no training data needed. The rebuild
+    is **validated** against the stored statics (edge count, lengths,
+    topology) so a wrong city cannot be attached silently.
+    """
+    if net is None:
+        from experiments.common import build_default   # offline-only import
+        net, _, _, _ = build_default(cars=1,
+                                     **bundle["meta"].get("overrides", {}))
+    statics = bundle["statics"]
+    if len(net.edges) != len(statics["edge_length"]):
+        raise ValueError(
+            f"network mismatch: rebuilt city has {len(net.edges)} edges, "
+            f"bundle has {len(statics['edge_length'])}")
+    if not (np.array_equal([e.u for e in net.edges], statics["edge_u"])
+            and np.array_equal([e.v for e in net.edges], statics["edge_v"])):
+        raise ValueError("network mismatch: edge topology differs")
+    if not np.allclose([e.length for e in net.edges], statics["edge_length"],
+                       rtol=1e-5):
+        raise ValueError("network mismatch: edge lengths differ")
+    statics.update(geometry_statics(net))
+    if "zone_codes" not in bundle["meta"]:
+        from ml.dataset import ZONE_CODES              # offline-only import
+        bundle["meta"]["zone_codes"] = {u.name: k
+                                        for u, k in ZONE_CODES.items()}
+    return bundle
+
+
 def cell_key(target: str, horizon_s: float) -> str:
     """The bundle's name for one (target, horizon) model, e.g. ``speed@10``."""
     return f"{target}@{horizon_s:g}"
@@ -85,7 +133,7 @@ def fit_bundle(data_dir, cells=DEFAULT_CELLS, *, test_seeds=(5,),
         })
 
     statics = {k: test[0][k] for k in STATIC_KEYS}
-    return {
+    bundle = {
         "models": models,
         "statics": statics,
         "meta": {
@@ -97,8 +145,11 @@ def fit_bundle(data_dir, cells=DEFAULT_CELLS, *, test_seeds=(5,),
             "test_days": len(test),
             "cells": meta_cells,
             "sklearn_version": sklearn.__version__,
+            "overrides": manifest.get("overrides", {}),
+            "zone_codes": manifest.get("zone_codes", {}),
         },
     }
+    return attach_geometry(bundle)
 
 
 def save(bundle: dict, path) -> None:
@@ -114,13 +165,24 @@ def load(path) -> dict:
 
 
 def main(argv=None):
-    """CLI: fit the default cells and save the bundle."""
+    """CLI: fit the default cells and save the bundle — or, with
+    ``--attach-geometry``, augment an existing bundle in place (no refit)."""
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--data", default="ml/data/varied")
     p.add_argument("--out", default="ml/models/varied.joblib")
     p.add_argument("--test-seeds", type=int, nargs="+", default=[5])
     p.add_argument("--val-seeds", type=int, nargs="+", default=[4])
+    p.add_argument("--attach-geometry", metavar="BUNDLE", default=None,
+                   help="attach street-map geometry to this existing bundle "
+                        "(validated city rebuild; skips fitting entirely)")
     args = p.parse_args(argv)
+
+    if args.attach_geometry:
+        bundle = attach_geometry(load(args.attach_geometry))
+        save(bundle, args.attach_geometry)
+        print(f"attached geometry ({bundle['meta']['n_edges']} edges) "
+              f"to {args.attach_geometry}")
+        return
 
     bundle = fit_bundle(args.data, test_seeds=tuple(args.test_seeds),
                         val_seeds=tuple(args.val_seeds))

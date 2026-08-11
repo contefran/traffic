@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir -r requirements-serve.txt
 COPY traffic_sim/ traffic_sim/
 COPY ml/ ml/
 COPY ml/models/varied.joblib ml/models/varied.joblib
+# The frontend's replayable held-out day (explicit COPY = loud failure if
+# the gitignored file hasn't been generated; see ml/dataset.py).
+COPY ml/data/varied/run_cars1000_seed5.npz ml/data/varied/run_cars1000_seed5.npz
 
 # Run as an unprivileged user; the app only ever reads from the image.
 RUN useradd --create-home app
