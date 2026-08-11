@@ -1,110 +1,182 @@
-# Traffic Simulator — traffic simulation in Python
+# Traffic Simulator — a simulated city with a shipped ML pipeline
 
-This project is an explicit traffic simulation written in Python.
-The goal is clarity and extensibility, not realism at all costs.
+A 2D city traffic simulator written from scratch in Python, used as the data
+factory for a complete machine-learning pipeline: the simulator generates
+traffic data, a forecasting model is trained and honestly evaluated on it, and
+the fitted model is served as a web API packaged in a Docker image you can run
+with one command.
 
-The simulator is built incrementally, starting from a road network and cars moving along edges, and progressively adding intersections, traffic lights, routing, metrics, and eventually learning-based agents.
+**Simulator → dataset → trained model → FastAPI service → Docker.** Every link
+in that chain lives in this repository and is tested.
 
-## Project goals
+## Try it (no checkout needed)
 
-- Simple, explicit data structures (no black boxes)
-- Deterministic, step-based simulation
-- Visual debugging via 2D animation
-- Easy to extend toward intersections, signals, and agent decision-making
-- Suitable as a base for later ML / RL experiments
+```bash
+docker run --rm -p 8000:8000 contefran/traffic-flow
+```
 
-## Current features
+Then:
 
-- Directed road network: a uniform grid, or a heterogeneous "city" grid with
-  jittered positions, one-way streets, missing links, and higher-speed
-  arterials (always repaired to stay strongly connected)
-- Routing: random wandering, or destination-based fastest-path routing (cars
-  steer toward a destination node, preferring faster arterials)
-- Nodes and edges with geometry and per-edge speed limits
-- Cars following the Intelligent Driver Model (IDM):
-  - smooth acceleration and braking
-  - realistic queues; density-dependent speed emerges (the fundamental diagram)
-  - no rear-end collisions
-- Fixed timestep simulation loop
-- Flow metrics (speed, queue length, throughput) and 2D animation via matplotlib
+- `curl localhost:8000/health` — the model's scorecard: which forecast cells
+  are loaded and their measured error on held-out days.
+- `http://localhost:8000/docs` — interactive API documentation.
+  `POST /predict` takes today's per-street observations so far (mean speed and
+  car count per 10 s bin, `null` speed where nothing drove) and returns the
+  per-street forecast.
 
-Cars cross intersections (a router picks the next edge) and obey traffic
-lights: each intersection runs its own signal on an independent timer (a
-per-node cycle / split / offset — no global clock), and cars queue at red and
-release on green. Signal timing is driven by a pluggable controller, ready for
-adaptive or learned policies later. Unsignalized intersections use an optional
-right-of-way model (arterial priority + gap acceptance) so minor streets yield
-to major-road traffic instead of driving straight through it.
+The image ([contefran/traffic-flow](https://hub.docker.com/r/contefran/traffic-flow))
+is self-contained: the fitted model bundle, its feature pipeline, and the
+exact library versions it was trained with are baked in.
 
-## Roadmap (high level)
+## The simulator
 
-1. Cars on edges ✅
-2. Intersections + random routing ✅
-3. Traffic lights and intersection controllers ✅ (fixed-time and protected-phase)
-4. Metrics and diagnostics ✅
-5. Destination-based routing ✅ (fastest-path; random wandering still available)
-6. ML / RL decision policies
+An explicit, step-based simulation — readable code and easy extensibility
+over physical realism; every behaviour is understandable by reading a few
+functions. The core is dependency-free (no numpy/matplotlib), which is what
+lets it run headless inside services and tests.
+
+- **Road network**: a heterogeneous city grid — jittered geometry, one-way
+  streets, missing links (always repaired to stay fully connected), fast
+  arterials, geometric roundabouts, and a grade-separated elevated ring +
+  expressway with proper tapered on/off-ramps.
+- **Driving**: the Intelligent Driver Model (car-following), MOBIL-style lane
+  changes and overtaking, kinematic slowdown into turns, and a mixed vehicle
+  fleet (city cars, sports cars, trucks, buses) with per-driver personality
+  jitter.
+- **Intersections**: pluggable signal controllers (fixed-time permissive and
+  protected-left phasing) with per-node cycle/split/offset timing,
+  speed-scaled yellow times, and a classical green-wave coordination
+  baseline; right-of-way with gap acceptance at unsignalized junctions and
+  roundabout entries.
+- **Demand**: land-use zones (residential/office/retail districts), and an
+  activity-based population — every car has a home, a workplace near it, and
+  a personal daily plan (commute, lunch, gym, pub), executed around the
+  clock with parking and dwelling. Rush hours *emerge* from the schedules.
+- **Safety as a metric**: collisions are physically meaningful (a car that
+  could not stop even at its physical braking limit) and are counted, never
+  hidden — a default simulated day is ~2 genuine crashes among 1000 cars,
+  and each residual crash mechanism is understood and documented.
+- **Instrumentation**: per-trip delay vs free-flow baseline, per-street and
+  per-intersection time series, fuel proxy, fundamental diagram — plus a live
+  animated map with a wall clock and an interactive dashboard with sliders
+  that mutate the running city (speed limits, following gaps, signal timing).
+
+## The ML pipeline
+
+The simulated city is non-stationary (rush hours, day-to-day demand
+variability), so it poses a real forecasting problem: *given today's traffic
+so far, predict each street's near-future state*. The pipeline, in the order
+it was built — with the measured verdict at each step:
+
+1. **Dataset** (`ml/dataset.py`) — seeded full-city days recorded at 0.1 s
+   and aggregated to 10 s bins per street; empty streets are `NaN`, not zero
+   (nobody driving is not the same as standing traffic). Train/val/test are
+   split by whole days, never shuffled rows.
+2. **Baselines** (`ml/baselines.py`) — persistence ("speed now = speed in
+   60 s") and climatology (the per-street average day). Climatology set the
+   bar to beat; persistence loses badly because single 10 s bins are
+   dominated by signal-phase noise.
+3. **Models** — ridge regression and gradient-boosted decision trees, both
+   written from scratch in numpy, then cross-checked against scikit-learn
+   implementations behind the same interface (agreement within a few percent
+   in every cell — the from-scratch versions validated, the library promoted
+   for serving). Features include lagged street state, climatology, a
+   city-wide "busyness" ratio, and the state of each street's feeder and
+   receiver streets.
+4. **Error analysis** (`ml/analysis.py`) — permutation importance and error
+   slices by hour/street class. Findings fed back into features; hypotheses
+   that failed are recorded as retired, not quietly dropped.
+
+**What's served** — each channel at the horizon where it has measured skill,
+scored on held-out days the model never saw:
+
+| Forecast cell | Climatology baseline | Served model |
+|---|---|---|
+| Street speed, 10 s ahead | 11.7 km/h MAE | **8.3 km/h MAE** |
+| Street occupancy, 60 s ahead | 0.136 cars MAE | **0.112 cars MAE** |
+
+An honest, measured limitation worth stating: beyond ~1 minute, speed
+forecasting in this city hits a ceiling — the demand pattern repeats daily,
+so the average day is nearly optimal and extra model capacity cannot help.
+The pipeline proves *why* (state information decays within ~2–3 signal
+cycles) rather than hiding it.
+
+## Serving
+
+`ml/artifact.py` fits the promoted models once and writes a single bundle
+file carrying the models, every learned table, the static street facts, and
+its own test scorecard. `ml/serve.py` (FastAPI) loads it at startup. The
+service never rebuilds a feature: requests are handed to the *training*
+feature pipeline, so the served forecast is bit-identical to the offline
+evaluation — the classic training–serving-skew bug is closed by
+construction, and an end-to-end test pins it. The `Dockerfile` packages the
+service with serving-only dependencies pinned to the versions the bundle was
+fitted with.
+
+## Running from source
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+python main.py                 # animated day in the default city (1000 cars)
+python main.py --dashboard     # interactive knobs + live metrics panel
+python main.py --help          # every flag: grid size, cars, signals, ...
+
+MPLBACKEND=Agg python -m pytest -q    # test suite, headless
+```
+
+Rebuilding the ML artefacts from scratch:
+
+```bash
+python -m ml.dataset --out ml/data/varied --intensity-range 0.55 1.0   # ~hours
+python -m ml.artifact --data ml/data/varied                            # fit + save bundle
+python -m ml.serve                                                     # serve it
+docker build -t traffic-flow .                                         # box it
+```
 
 ## Project structure
 
-.
-├── traffic_sim/          # simulation package
-│   ├── network.py        # Node/Edge/RoadNetwork + grid/city builders + geometry
-│   ├── vehicles.py       # Car model
-│   ├── simulation.py     # TrafficSim step loop (car-following + transfers)
-│   ├── routing.py        # RandomRouter + ShortestPathRouter (intersection decisions)
-│   ├── signals.py        # traffic lights: controller interface + fixed-time
-│   ├── priority.py       # right-of-way / gap acceptance at unsignalized nodes
-│   ├── metrics.py        # flow diagnostics: speed, queue, throughput
-│   └── visualization.py  # matplotlib plotting, animation, GIF export
-├── tests/                # pytest suite
-├── main.py               # entry point / example usage
-└── requirements.txt
+```
+traffic_sim/          # the simulator package (dependency-free core)
+  network.py            # road network + city builders + all geometry
+  simulation.py         # the step loop: car-following, lanes, transfers
+  vehicles.py           # cars, vehicle types, driver personality
+  routing.py            # random + fastest-path destination routing
+  signals.py            # signal controllers, per-node timing, green wave
+  priority.py           # right-of-way at unsignalized junctions
+  zones.py / demand.py / activities.py / parking.py   # land use → daily life
+  grade.py / roundabouts.py                           # elevated ring, roundabouts
+  metrics.py            # trips, delay, safety, per-street time series
+  visualization.py / dashboard.py                     # animation, live controls
+  tuning.py             # flat parameter vector ↔ signal timing (the RL surface)
+ml/                   # the ML pipeline consuming the simulator
+  dataset.py  baselines.py  linear.py  gbdt.py  sklearn_models.py
+  analysis.py  artifact.py  serve.py
+experiments/          # reproducible studies (signal phasing, gap sweeps, ...)
+tests/                # pytest suite covering both packages
+main.py               # CLI entry point
+Dockerfile            # the serving image
+```
 
-## Requirements
+## Roadmap
 
-- Python 3.10+
-- numpy, matplotlib (visualization); pytest (tests)
-
-Install dependencies with:
-
-pip install -r requirements.txt
-
-## Running the simulation
-
-From the project directory:
-
-python main.py
-
-This will:
-- build a small grid road network
-- place a few cars on selected edges
-- run and animate the simulation
-
-## Running the tests
-
-MPLBACKEND=Agg python -m pytest -q
-
-The simulation core has no plotting dependency, so the tests run without a display.
+1. ✅ Cars on edges → intersections → signals → routing → metrics
+2. ✅ A living city: zones, activity-based demand, parking, day/night
+3. ✅ Near-crash-free base model (every residual collision understood)
+4. ✅ Flow forecasting pipeline: dataset → baselines → models → analysis
+5. ✅ Serving: model artifact → FastAPI → Docker (→ Docker Hub)
+6. ⏳ Map frontend: the live city coloured by the service's forecasts
+7. ⏳ Reinforcement learning: optimize per-intersection signal timing
+   against the measured green-wave baseline
 
 ## Design philosophy
 
-This project deliberately avoids:
-- overly detailed vehicle dynamics
-- premature optimisation
-- large external frameworks
-
-Instead, it prioritises:
-- readable code
-- explicit state updates
-- ease of experimentation
-
-The intent is that every behaviour in the simulation can be understood by reading a few functions.
-
-## Status
-
-This is an active work in progress.
-The API and internal structure are expected to evolve as intersections and control logic are added.
+Explicit state, readable updates, no black boxes; behaviours (traffic jams,
+the flow–density relation, rush hours) *emerge* from simple local rules
+rather than being imposed. Measured claims over plausible ones — every model
+comparison in this README comes from seeded, reproducible runs on held-out
+data, and negative results are kept on the record.
 
 ## License
 
