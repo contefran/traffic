@@ -9,6 +9,13 @@ with one command.
 **Simulator → dataset → trained model → FastAPI service → Docker.** Every link
 in that chain lives in this repository and is tested.
 
+![The live map: model forecasts for the morning rush on a held-out day](docs/screenshots/forecast-rush.png)
+
+*The served frontend at 09:12 on a day the model never trained on: every
+street coloured by the model's speed forecast (red stopped → green at the
+limit), greyed where its occupancy forecast expects nobody. Other views show
+observed speed/occupancy, street class, and [land use](docs/screenshots/land-use.png).*
+
 ## Try it (no checkout needed)
 
 ```bash
@@ -191,7 +198,8 @@ Dockerfile            # the serving image
 3. ✅ Near-crash-free base model (every residual collision understood)
 4. ✅ Flow forecasting pipeline: dataset → baselines → models → analysis
 5. ✅ Serving: model artifact → FastAPI → Docker (→ Docker Hub)
-6. ⏳ Map frontend: the live city coloured by the service's forecasts
+6. ✅ Map frontend: the live city replayed and coloured by the service's
+   forecasts, shipped inside the image
 7. ⏳ Reinforcement learning: optimize per-intersection signal timing
    against the measured green-wave baseline
 
