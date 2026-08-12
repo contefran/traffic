@@ -114,6 +114,7 @@ const ZONE_COLOURS = { RESIDENTIAL: "#4caf50", OFFICE: "#4a86e8",
                        RETAIL: "#e8963a", OTHER: "#6b7280" };
 const UNZONED = "#565c66", EMPTY = "#3a3f47";
 const KMH = 3.6, TICK_MS = 400;
+const FC_EMPTY = 0.05;   // forecast occupancy below this = "nobody driving"
 
 function speedClass(e) {
   if (e.level > 0) return "elevated";
@@ -325,9 +326,11 @@ async function setBin(b, redraw = true) {
   slider.value = bin;
   updateClock();
   const mode = viewSel.value;
-  if (mode.startsWith("fc_")) {
-    const target = mode === "fc_speed" ? "speed" : "counts";
-    await ensureForecast(target, bin);
+  if (mode === "fc_speed") {           // speed colours + occupancy empty-gate
+    await ensureForecast("speed", bin);
+    await ensureForecast("counts", bin);
+  } else if (mode === "fc_counts") {
+    await ensureForecast("counts", bin);
   }
   if (redraw) { showInfo(hovered); draw(); }
 }
