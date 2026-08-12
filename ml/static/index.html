@@ -158,7 +158,8 @@ function edgeColour(e) {
   const mode = viewSel.value;
   if (mode === "class") return CLASS_STYLE[speedClass(e)].colour;
   if (mode === "zones") {
-    if (e.level > 0) return CLASS_STYLE.elevated.colour;
+    // Elevated roads have no land use by construction — in this view they
+    // read as unzoned like the ramps, not in their (retail-like) own colour.
     const name = zoneName(e.zone);
     return name ? (ZONE_COLOURS[name] || UNZONED) : UNZONED;
   }
@@ -167,11 +168,19 @@ function edgeColour(e) {
     return speedColour(demo.speed[bin][e.id], e.speed_limit);
   if (mode === "obs_counts")
     return densityColour(demo.counts[bin][e.id], e);
-  const target = mode === "fc_speed" ? "speed" : "counts";
-  const preds = forecasts[target].get(bin);
+  if (mode === "fc_speed") {
+    // The speed model answers "how fast, IF driven" — for an empty street
+    // it forecasts ~the limit (its climatology falls back to free flow),
+    // which would paint dead side streets green. The occupancy forecast is
+    // the "will anyone be there" signal, so it gates the colour.
+    const sp = forecasts.speed.get(bin), oc = forecasts.counts.get(bin);
+    if (!sp) return EMPTY;                       // not fetched yet
+    if (oc && oc[e.id] < FC_EMPTY) return EMPTY; // forecast: nobody driving
+    return speedColour(sp[e.id], e.speed_limit);
+  }
+  const preds = forecasts.counts.get(bin);
   if (!preds) return EMPTY;                      // not fetched yet
-  return target === "speed" ? speedColour(preds[e.id], e.speed_limit)
-                            : densityColour(preds[e.id], e);
+  return densityColour(preds[e.id], e);
 }
 
 /* ---- geometry / drawing ------------------------------------------- */
@@ -190,6 +199,19 @@ function fitView() {
 const sx = x => view.ox + view.s * x;
 const sy = y => view.oy - view.s * y;      // world y up, screen y down
 
+// Each direction of a two-way street is its own edge; drawn dead-centre the
+// pair overlaps exactly — one direction paints over the other and hover can
+// only ever hit one of them. Offset every edge to its right-hand side
+// (right-hand traffic), so a two-way street renders as two parallel
+// carriageways, each coloured and hoverable on its own.
+function seg(e) {
+  const x1 = sx(e.x1), y1 = sy(e.y1), x2 = sx(e.x2), y2 = sy(e.y2);
+  const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1;
+  const off = CLASS_STYLE[speedClass(e)].width / 2 + 0.8;
+  return [x1 - dy / L * off, y1 + dx / L * off,   // right of travel
+          x2 - dy / L * off, y2 + dx / L * off];  // (screen y points down)
+}
+
 function draw() {
   ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
@@ -199,9 +221,10 @@ function draw() {
       if ((e.level > 0 ? 1 : 0) !== pass) continue;
       ctx.strokeStyle = e === hovered ? "#ffffff" : edgeColour(e);
       ctx.lineWidth = CLASS_STYLE[speedClass(e)].width + (e === hovered ? 1.2 : 0);
+      const [x1, y1, x2, y2] = seg(e);
       ctx.beginPath();
-      ctx.moveTo(sx(e.x1), sy(e.y1));
-      ctx.lineTo(sx(e.x2), sy(e.y2));
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
       ctx.stroke();
     }
   }
@@ -210,7 +233,7 @@ function draw() {
 function nearestEdge(px, py) {             // closest segment within 6 px
   let best = null, bestD = 6;
   for (const e of net.edges) {
-    const x1 = sx(e.x1), y1 = sy(e.y1), x2 = sx(e.x2), y2 = sy(e.y2);
+    const [x1, y1, x2, y2] = seg(e);
     const dx = x2 - x1, dy = y2 - y1;
     const t = Math.max(0, Math.min(1,
       ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy || 1)));
@@ -238,7 +261,7 @@ function showInfo(e) {
     const v = demo.speed[bin][e.id], c = demo.counts[bin][e.id];
     rows += `
     <tr><td>speed now</td><td>${v == null ? "—" : Math.round(v * KMH) + " km/h"}</td></tr>
-    <tr><td>cars now</td><td>${c.toFixed(1)}</td></tr>`;
+    <tr><td>cars now (10 s avg)</td><td>${c.toFixed(2)}</td></tr>`;
   }
   infoBox.innerHTML = `<h2>Street #${e.id}</h2><table>${rows}</table>`;
 }
@@ -254,14 +277,16 @@ function buildLegend() {
                        ["elevated highway", CLASS_STYLE.elevated.colour]]);
   else if (mode === "zones")
     rows = ramp(null, [...Object.entries(ZONE_COLOURS).map(([n, c]) => [n.toLowerCase(), c]),
-                       ["unzoned (ramps, rings)", UNZONED],
-                       ["elevated", CLASS_STYLE.elevated.colour]]);
+                       ["unzoned (highways, ramps, rings)", UNZONED]]);
   else if (mode.endsWith("speed"))
     rows = ramp(null, [["at speed limit", "#3fae5a"], ["half", "#e8c84b"],
                        ["stopped", "#d64545"], ["nobody driving", EMPTY]]);
   else
-    rows = ramp(null, [["empty", EMPTY], ["light", "#8a8f98"],
-                       ["busy", "#d9a441"], ["jammed", "#d64545"]]);
+    rows = ramp(null, [["empty · 0", EMPTY],
+                       ["light · ≤ 2 veh/km/lane", "#8a8f98"],
+                       ["busy · ≈ 15 veh/km/lane", "#d9a441"],
+                       ["jammed · ≥ 40 veh/km/lane", "#d64545"]])
+         + `<div class="row" style="color:var(--dim)">≈ 0.3 / 2 / 6 cars on a 150 m one-lane street</div>`;
   document.getElementById("legend").innerHTML = rows;
 }
 

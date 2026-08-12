@@ -187,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Gaussian home->work distance scale [m]: people take "
                              "jobs near home (smaller = shorter commutes). A key knob "
                              "for analysis.")
+    demand.add_argument("--long-commute-share", type=float, default=0.15,
+                        help="fraction of workers whose job is uniform city-wide "
+                             "instead of near home — the cross-town commuters "
+                             "that keep the elevated ring/expressway in use")
 
     traffic = p.add_argument_group("traffic")
     traffic.add_argument("--cars", type=int, default=1000, help="number of cars")
@@ -297,7 +301,8 @@ def build_simulation(args):
         venues = assign_venues(net, zones, seed=args.seed)
         schedule = ActivitySchedule(venues, day_length=args.day_length,
                                     seed=args.car_seed, work_scale=args.work_scale,
-                                    intensity=args.intensity)
+                                    intensity=args.intensity,
+                                    long_commute_share=args.long_commute_share)
         schedule.assign(cars, net, zones)
     router = (ShortestPathRouter(net, seed=args.router_seed, demand=demand,
                                  edge_points=args.edge_points)

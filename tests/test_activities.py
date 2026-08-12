@@ -50,11 +50,36 @@ def test_proximity_makes_work_near_home():
         bx, by = _edge_mid(net, b)
         return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
 
-    cars, _ = _scheduled(net, zones, 300, work_scale=300.0)
+    cars, _ = _scheduled(net, zones, 300, work_scale=300.0,
+                         long_commute_share=0.0)   # pure Gaussian mechanism
     commute = st.mean(dist(c.home, c.work) for c in cars)
     # what uniform-random office allocation would average, per car
     random_mean = st.mean(st.mean(dist(c.home, o) for o in offices) for c in cars)
     assert commute < 0.6 * random_mean, "proximity should clearly shorten commutes"
+
+
+def test_long_commute_share_mixes_in_cross_town_jobs():
+    net, zones = _city()
+    offices = edges_by_zone(zones)[LandUse.OFFICE]
+
+    def dist(a, b):
+        ax, ay = _edge_mid(net, a)
+        bx, by = _edge_mid(net, b)
+        return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
+    def mean_commute(share):
+        cars, _ = _scheduled(net, zones, 300, work_scale=300.0,
+                             long_commute_share=share)
+        return st.mean(dist(c.home, c.work) for c in cars)
+
+    near, mixed, uniform = (mean_commute(s) for s in (0.0, 0.3, 1.0))
+    # A share of city-wide jobs lengthens the mean commute monotonically,
+    # and share=1 approaches what uniform allocation averages.
+    assert near < mixed < uniform
+    cars, _ = _scheduled(net, zones, 300, work_scale=300.0,
+                         long_commute_share=1.0)
+    random_mean = st.mean(st.mean(dist(c.home, o) for o in offices) for c in cars)
+    assert uniform > 0.8 * random_mean
 
 
 def test_on_wake_and_on_park_cycle_the_plan():

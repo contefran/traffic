@@ -250,14 +250,21 @@ def build_city_grid(
         """Connect neighbours ``u`` and ``v``, honouring ``drop_prob`` (skip the
         connection) and ``one_way_prob`` (a single directed edge instead of a
         two-way pair). ``protected`` connections (ring, arterial) are never
-        dropped; ``two_way`` ones (the ring loop) are never made one-way, so the
-        loop stays strongly connected on its own."""
+        dropped and never made one-way — an arterial corridor must carry both
+        directions end to end; ``two_way`` ones (the ring loop) are likewise
+        never one-way, so the loop stays strongly connected on its own."""
         if not protected and drop_prob and rng.random() < drop_prob:
             return
         if not two_way and one_way_prob and rng.random() < one_way_prob:
-            # One-way: keep a single direction (chosen at random).
+            # One-way: keep a single direction (chosen at random). The draws
+            # happen for protected connections too (keeping the RNG stream —
+            # and so the rest of the map — unchanged), but are ignored there.
             a, b = (u, v) if rng.random() < 0.5 else (v, u)
-            add_edge(a, b, speed, lanes)
+            if not protected:
+                add_edge(a, b, speed, lanes)
+                return
+            add_edge(u, v, speed, lanes)
+            add_edge(v, u, speed, lanes)
         else:
             add_edge(u, v, speed, lanes)
             add_edge(v, u, speed, lanes)

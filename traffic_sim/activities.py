@@ -108,7 +108,8 @@ class ActivitySchedule:
 
     def __init__(self, venues: Venues, *, day_length: float = 600.0,
                  seed: int = 0, work_scale: float = 400.0,
-                 intensity: float = 1.0) -> None:
+                 intensity: float = 1.0,
+                 long_commute_share: float = 0.15) -> None:
         """``venues`` supplies the restaurant/gym/pub pools; ``day_length`` is the
         simulated seconds in a day (plan times are placed on it). ``work_scale``
         [m] is the Gaussian distance scale for choosing a workplace **near home**
@@ -116,6 +117,14 @@ class ActivitySchedule:
         probability ``exp(-d²/2·work_scale²)`` in the home→office distance ``d``,
         which keeps commutes realistic instead of criss-crossing the whole map.
         Seeded so every car's plan is reproducible.
+
+        ``long_commute_share`` in [0, 1] is the fraction of workers whose job
+        is instead drawn **uniformly city-wide** — the long cross-town
+        commuters every real city has. Without them the near-home Gaussian
+        produces almost no trip long enough to justify a ramp, and the fast
+        ring/expressway sits starved (~2% of vehicle-time measured); the
+        default 15% share gives the highway the traffic it was built for
+        while keeping the *median* commute short (clock coherence).
 
         ``intensity`` in [0, 1] is the **day's demand intensity** — the knob that
         makes one simulated day busier or quieter than another (weekday vs.
@@ -127,11 +136,14 @@ class ActivitySchedule:
         ``intensity < 1``)."""
         if not 0.0 <= intensity <= 1.0:
             raise ValueError("intensity must be in [0, 1]")
+        if not 0.0 <= long_commute_share <= 1.0:
+            raise ValueError("long_commute_share must be in [0, 1]")
         self.venues = venues
         self.day_length = day_length
         self.rng = random.Random(seed)
         self.work_scale = work_scale
         self.intensity = intensity
+        self.long_commute_share = long_commute_share
         self.net = None   # set in :meth:`assign`
 
     # ---- helpers -------------------------------------------------------------
@@ -232,7 +244,11 @@ class ActivitySchedule:
     # ---- setup + runtime -----------------------------------------------------
 
     def _pick_work(self, car, offices, office_mid) -> int:
-        """An office for ``car``, weighted toward those near its home (Gaussian)."""
+        """An office for ``car``, weighted toward those near its home (Gaussian)
+        — except for the ``long_commute_share`` of workers whose job is drawn
+        uniformly city-wide (the cross-town commuters that use the highway)."""
+        if self.rng.random() < self.long_commute_share:
+            return self.rng.choice(offices)
         hx, hy = _edge_mid(self.net, car.home)
         s2 = 2.0 * self.work_scale * self.work_scale
         weights = [math.exp(-((office_mid[e][0] - hx) ** 2

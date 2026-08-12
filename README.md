@@ -49,9 +49,10 @@ lets it run headless inside services and tests.
   baseline; right-of-way with gap acceptance at unsignalized junctions and
   roundabout entries.
 - **Demand**: land-use zones (residential/office/retail districts), and an
-  activity-based population — every car has a home, a workplace near it, and
-  a personal daily plan (commute, lunch, gym, pub), executed around the
-  clock with parking and dwelling. Rush hours *emerge* from the schedules.
+  activity-based population — every car has a home, a workplace (near home
+  for most; a share of cross-town long commuters feeds the highway), and a
+  personal daily plan (commute, lunch, gym, pub), executed around the clock
+  with parking and dwelling. Rush hours *emerge* from the schedules.
 - **Safety as a metric**: collisions are physically meaningful (a car that
   could not stop even at its physical braking limit) and are counted, never
   hidden — a default simulated day is ~2 genuine crashes among 1000 cars,
@@ -92,8 +93,8 @@ scored on held-out days the model never saw:
 
 | Forecast cell | Climatology baseline | Served model |
 |---|---|---|
-| Street speed, 10 s ahead | 11.7 km/h MAE | **8.3 km/h MAE** |
-| Street occupancy, 60 s ahead | 0.136 cars MAE | **0.112 cars MAE** |
+| Street speed, 10 s ahead | 11.7 km/h MAE | **8.2 km/h MAE** |
+| Street occupancy, 60 s ahead | 0.140 cars MAE | **0.121 cars MAE** |
 
 An honest, measured limitation worth stating: beyond ~1 minute, speed
 forecasting in this city hits a ceiling — the demand pattern repeats daily,
@@ -116,7 +117,7 @@ fitted with.
 ## Scope and limitations
 
 The trained model is deliberately **city-specific**. The dataset contract
-fixes the road network across all runs, so the model learns these 1646
+fixes the road network across all runs, so the model learns these 1669
 streets as individuals — its strongest feature is each street's own average
 day — and the served bundle is meaningless on any other map (the serving
 layer actually enforces this: geometry can only be attached to a bundle
@@ -153,7 +154,7 @@ MPLBACKEND=Agg python -m pytest -q    # test suite, headless
 Rebuilding the ML artefacts from scratch:
 
 ```bash
-python -m ml.dataset --out ml/data/varied --intensity-range 0.55 1.0   # ~hours
+python -m ml.dataset --out ml/data/varied --intensity-range 0.55 1.0   # minutes–hours (parallel over all cores)
 python -m ml.artifact --data ml/data/varied                            # fit + save bundle
 python -m ml.serve                                                     # serve it
 docker build -t traffic-flow .                                         # box it

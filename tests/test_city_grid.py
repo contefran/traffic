@@ -43,6 +43,18 @@ def test_one_way_reduces_edge_count():
     assert len(two_way.edges) // 2 <= len(mostly_one_way.edges) < len(two_way.edges)
 
 
+def test_arterials_are_always_two_way():
+    # Arterial corridors must carry both directions end to end: even at
+    # one_way_prob=1 every arterial-speed edge keeps its reverse (locals do
+    # shed theirs — that's what the probability is for).
+    city = build_city_grid(8, 8, block=50.0, seed=3, one_way_prob=1.0,
+                          arterial_every=3, arterial_speed=19.4)
+    pairs = {(e.u, e.v) for e in city.edges}
+    arterial = [e for e in city.edges if e.speed_limit >= 19.4]
+    assert arterial
+    assert all((e.v, e.u) in pairs for e in arterial)
+
+
 def test_drop_prob_removes_connections():
     full = build_city_grid(6, 6, block=50.0, seed=3)
     dropped = build_city_grid(6, 6, block=50.0, seed=3, drop_prob=0.3)
