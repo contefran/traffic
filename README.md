@@ -1,22 +1,16 @@
 # Traffic Simulator — a simulated city with a shipped ML pipeline
 
-A 2D city traffic simulator written from scratch in Python, used as the data
-factory for a complete machine-learning pipeline: the simulator generates
-traffic data, a forecasting model is trained and evaluated on held-out days, and
-the fitted model is served as a web API packaged in a Docker image you can run
-with one command.
+A 2D city traffic simulator written from scratch in Python, used as the data factory for a complete machine-learning pipeline: the simulator generates traffic data, a forecasting model is trained and evaluated on held-out days, and the fitted model is served as a web API packaged in a Docker image# Traffic Simulator — a simulated city with a shipped ML pipeline
 
-**Simulator → dataset → trained model → FastAPI service → Docker.** Every link
-in that chain lives in this repository and is tested.
+A 2D city traffic simulator written from scratch in Python, used as the data factory for a complete machine-learning pipeline: the simulator generates traffic data, a forecasting model is trained and evaluated on held-out days, and the fitted model is served as a web API packaged in a Docker image.
+
+**Simulator → dataset → trained model → FastAPI service → Docker.** Every link in that chain lives in this repository and is tested.
 
 ![The live map: model forecasts for the morning rush on a held-out day](docs/screenshots/forecast-rush.png)
 
-*The served frontend at 09:12 on a day the model never trained on: every
-street coloured by the model's speed forecast (red stopped → green at the
-limit), greyed where its occupancy forecast expects nobody. Other views show
-observed speed/occupancy, street class, and [land use](docs/screenshots/land-use.png).*
+*The served frontend at 09:12 on a day the model never trained on: every street coloured by the model's speed forecast (red stopped → green at the limit), greyed where its occupancy forecast expects nobody. Other views show observed speed/occupancy, street class, and [land use](docs/screenshots/land-use.png).*
 
-## Try it (no checkout needed)
+## How to try it
 
 ```bash
 docker run --rm -p 8000:8000 contefran/traffic-flow
@@ -24,114 +18,47 @@ docker run --rm -p 8000:8000 contefran/traffic-flow
 
 Then:
 
-- `curl localhost:8000/health` — the model's scorecard: which forecast cells
-  are loaded and their measured error on held-out days.
-- `http://localhost:8000/docs` — interactive API documentation.
-  `POST /predict` takes today's per-street observations so far (mean speed and
-  car count per 10 s bin, `null` speed where nothing drove) and returns the
-  per-street forecast.
+- `curl localhost:8000/health` — the model's scorecard: which forecast cells are loaded and their measured error on held-out days.
+- `http://localhost:8000/docs` — interactive API documentation. `POST /predict` takes today's per-street observations so far (mean speed and car count per 10 s bin, `null` speed where nothing drove) and returns the per-street forecast.
 
-The image ([contefran/traffic-flow](https://hub.docker.com/r/contefran/traffic-flow))
-is self-contained: the fitted model bundle, its feature pipeline, and the
-exact library versions it was trained with are baked in.
+The image ([contefran/traffic-flow](https://hub.docker.com/r/contefran/traffic-flow)) is self-contained: the fitted model bundle, its feature pipeline, and the exact library versions it was trained with are baked in.
 
 ## The simulator
 
-An explicit, step-based simulation — readable code and easy extensibility
-over physical realism; every behaviour is understandable by reading a few
-functions. The core is dependency-free (no numpy/matplotlib), which is what
-lets it run headless inside services and tests.
+An explicit, step-based simulation — the focus is on code readability and easy extensibility over physical realism, while still keeping a maningful simulation. The core is dependency-free (no numpy/matplotlib), which is what lets it run headless inside services and tests.
 
-- **Road network**: a heterogeneous city grid — jittered geometry, one-way
-  streets, missing links (always repaired to stay fully connected), fast
-  arterials, geometric roundabouts, and a grade-separated elevated ring +
-  expressway with proper tapered on/off-ramps.
-- **Driving**: the Intelligent Driver Model (car-following), MOBIL-style lane
-  changes and overtaking, kinematic slowdown into turns, and a mixed vehicle
-  fleet (city cars, sports cars, trucks, buses) with per-driver personality
-  jitter.
-- **Intersections**: pluggable signal controllers (fixed-time permissive and
-  protected-left phasing) with per-node cycle/split/offset timing,
-  speed-scaled yellow times, and a classical green-wave coordination
-  baseline; right-of-way with gap acceptance at unsignalized junctions and
-  roundabout entries.
-- **Demand**: land-use zones (residential/office/retail districts), and an
-  activity-based population — every car has a home, a workplace (near home
-  for most; a share of cross-town long commuters feeds the highway), and a
-  personal daily plan (commute, lunch, gym, pub), executed around the clock
-  with parking and dwelling. Rush hours *emerge* from the schedules.
-- **Safety as a metric**: collisions are physically meaningful (a car that
-  could not stop even at its physical braking limit) and are counted, never
-  hidden — a default simulated day is ~2 genuine crashes among 1000 cars,
-  and each residual crash mechanism is understood and documented.
-- **Instrumentation**: per-trip delay vs free-flow baseline, per-street and
-  per-intersection time series, fuel proxy, fundamental diagram — plus a live
-  animated map with a wall clock and an interactive dashboard with sliders
-  that mutate the running city (speed limits, following gaps, signal timing).
+- **Road network**: a heterogeneous city grid — jittered geometry, one-way streets, missing links (always repaired to stay fully connected), fast arterials, geometric roundabouts, and a grade-separated elevated ring + expressway with proper tapered on/off-ramps.
+- **Driving**: the Intelligent Driver Model (car-following), MOBIL-style lane changes and overtaking, kinematic slowdown into turns, and a mixed vehicle fleet (city cars, sports cars, trucks, buses) with per-driver personality jitter.
+- **Intersections**: pluggable signal controllers (fixed-time permissive and protected-left phasing) with per-node cycle/split/offset timing, speed-scaled yellow times, and a classical green-wave coordination baseline; right-of-way with gap acceptance at unsignalized junctions and roundabout entries.
+- **Demand**: land-use zones (residential/office/retail districts), and an activity-based population — every car has a home, a workplace (near home for most; a share of cross-town long commuters feeds the highway), and a personal daily plan (commute, lunch, gym, pub), executed around the clock with parking and dwelling. Rush hours *emerge* from the schedules.
+- **Safety as a metric**: collisions are physically meaningful (a car that could not stop even at its physical braking limit) and are counted — a default simulated day is ~2 genuine crashes among 1000 cars, and each residual crash mechanism is understood and documented.
+- **Instrumentation**: per-trip delay vs free-flow baseline, per-street and per-intersection time series, fuel proxy, fundamental diagram — plus a live animated map with a wall clock and an interactive dashboard with sliders that mutate the running city (speed limits, following gaps, signal timing).
 
 ## The ML pipeline
 
-The simulated city is non-stationary (rush hours, day-to-day demand
-variability), so it poses a real forecasting problem: *given today's traffic
-so far, predict each street's near-future state*. The pipeline, in the order
-it was built — with the measured verdict at each step:
+The simulated city is non-stationary (rush hours, day-to-day demand variability), so it poses a real forecasting problem: *given today's traffic so far, predict each street's near-future state*. The pipeline, in the order it was built — with the measured verdict at each step:
 
-1. **Dataset** (`ml/dataset.py`) — seeded full-city days recorded at 0.1 s
-   and aggregated to 10 s bins per street; empty streets are `NaN`, not zero
-   (nobody driving is not the same as standing traffic). Train/val/test are
-   split by whole days, never shuffled rows.
-2. **Baselines** (`ml/baselines.py`) — persistence ("speed now = speed in
-   60 s") and climatology (the per-street average day). Climatology set the
-   bar to beat; persistence loses badly because single 10 s bins are
-   dominated by signal-phase noise.
-3. **Models** — ridge regression and gradient-boosted decision trees, both
-   written from scratch in numpy, then cross-checked against scikit-learn
-   implementations behind the same interface (agreement within a few percent
-   in every cell — the from-scratch versions validated, the library promoted
-   for serving). Features include lagged street state, climatology, a
-   city-wide "busyness" ratio, and the state of each street's feeder and
-   receiver streets.
-4. **Error analysis** (`ml/analysis.py`) — permutation importance and error
-   slices by hour/street class. Findings fed back into features; hypotheses
-   that failed are recorded as retired, not quietly dropped.
+1. **Dataset** (`ml/dataset.py`) — seeded full-city days recorded at 0.1 s and aggregated to 10 s bins per street.
+2. **Baselines** (`ml/baselines.py`) — persistence ("speed now = speed in 60 s") and climatology (the per-street average day). Climatology set the bar to beat; persistence loses badly because single 10 s bins are dominated by signal-phase noise.
+3. **Models** — ridge regression and gradient-boosted decision trees, **both written from scratch in numpy, then cross-checked against scikit-learn implementations behind the same interface** (agreement within a few percent in every cell — the from-scratch versions validated, the library promoted for serving). Features include lagged street state, climatology, a city-wide "busyness" ratio, and the state of each street's feeder and receiver streets.
+4. **Error analysis** (`ml/analysis.py`) — permutation importance and error slices by hour/street class. Findings fed back into features; hypotheses that failed are recorded as retired.
 
-**What's served** — each channel at the horizon where it has measured skill,
-scored on held-out days the model never saw:
+**What's served** — each channel at the horizon where it has measured skill, scored on held-out days the model never saw:
 
 | Forecast cell | Climatology baseline | Served model |
 |---|---|---|
 | Street speed, 10 s ahead | 11.7 km/h MAE | **8.2 km/h MAE** |
 | Street occupancy, 60 s ahead | 0.140 cars MAE | **0.121 cars MAE** |
 
-A measured limitation worth stating: beyond ~1 minute, speed
-forecasting in this city hits a ceiling — the demand pattern repeats daily,
-so the average day is nearly optimal and extra model capacity cannot help.
-The pipeline proves *why* (state information decays within ~2–3 signal
-cycles) rather than hiding it.
+A measured limitation worth stating: beyond ~1 minute, speed forecasting in this city hits a ceiling — the demand pattern repeats daily, so the average day is nearly optimal and extra model capacity cannot help. This is proven by the pipeline: state information decays within ~2–3 signal cycles.
 
 ## Serving
 
-`ml/artifact.py` fits the promoted models once and writes a single bundle
-file carrying the models, every learned table, the static street facts, and
-its own test scorecard. `ml/serve.py` (FastAPI) loads it at startup. The
-service never rebuilds a feature: requests are handed to the *training*
-feature pipeline, so the served forecast is bit-identical to the offline
-evaluation — the classic training–serving-skew bug is closed by
-construction, and an end-to-end test pins it. The `Dockerfile` packages the
-service with serving-only dependencies pinned to the versions the bundle was
-fitted with.
+`ml/artifact.py` fits the promoted models once and writes a single bundle file carrying the models, every learned table, the static street facts, and its own test scorecard. `ml/serve.py` (FastAPI) loads it at startup. The service never rebuilds a feature: requests are handed to the *training* feature pipeline, so the served forecast is bit-identical to the offline evaluation — the classic training–serving-skew bug is closed by construction, and an end-to-end test pins it. The `Dockerfile` packages the service with serving-only dependencies pinned to the versions the bundle was fitted with.
 
 ## Signal-timing optimization
 
-The city's 336 traffic signals (green splits plus coordination offsets —
-1,680 numbers via the `ParameterSpace` adapter) are also an optimization
-problem: choose the timings that move the most traffic. The search harness
-(`ml/opt/`) scores a candidate plan by simulating full days under it and
-comparing against *same-seed* baseline days — **common random numbers**,
-because day-to-day demand noise is as large as the effects being measured.
-Trips completed is weighted alongside mean delay (a jammed city *flatters*
-its mean delay — only the lucky trips finish and get averaged), and crashes
-are a hard guardrail, never a currency the optimizer may spend.
+The city's 336 traffic signals (green splits plus coordination offsets — 1,680 numbers via the `ParameterSpace` adapter) are also an optimization problem: choose the timings that move the most traffic. The search harness (`ml/opt/`) scores a candidate plan by simulating full days under it and comparing against *same-seed* baseline days — **common random numbers**, because day-to-day demand noise is as large as the effects being measured. Trips completed is weighted alongside mean delay (a jammed city *flatters* its mean delay — only the lucky trips finish and get averaged), and crashes are a hard guardrail (instead of an optimizable variable).
 
 Measured on held-out test days the search never touched:
 
@@ -142,44 +69,13 @@ Measured on held-out test days the search never touched:
 
 ![Optimization verdict: per-seed scores on held-out days and load generalization](docs/screenshots/signal-optimization.png)
 
-The winning plan comes from a structured search over four whole-city knobs
-(cycle-length scale, through-green share, arterial bias, green-wave offset
-scale) — and the offset knob's optimum sitting at exactly 1.0 means the
-search independently *rediscovered* the classical green-wave progression
-speed rather than being told it. A 48-hour evolution-strategy fine-tune of
-all 1,680 per-intersection dials then **failed to improve further on
-held-out days** — its training-side gains were seed noise, caught by the
-validation protocol ([the search curve](docs/screenshots/signal-optimization-curve.png))
-— and the project reports that as the finding it is: under periodic demand,
-low-dimensional structure is near-optimal, the same lesson the forecasting
-phase learned from climatology. The plan generalizes across load (+0.17 /
-+0.14 score gain at half / 1.5× the tuning demand), with one caveat: at
-heavy load its shorter cycles carry a measurable crash cost.
+The winning plan comes from a structured search over four whole-city knobs (cycle-length scale, through-green share, arterial bias, green-wave offset scale) — and the offset knob's optimum sitting at exactly 1.0 means the search independently *rediscovered* the classical green-wave progression speed rather than being told it. A 48-hour evolution-strategy fine-tune of all 1,680 per-intersection dials then **failed to improve further on held-out days** — its training-side gains were seed noise, caught by the validation protocol ([the search curve (docs/screenshots/signal-optimization-curve.png)) — and the project reports that as the finding it is: under periodic demand, low-dimensional structure is near-optimal, the same lesson the forecasting phase learned from climatology. The plan generalizes across load (+0.17 / +0.14 score gain at half / 1.5× the tuning demand), with one dowsize: at heavy load its shorter cycles carry a measurable crash cost.
 
 ## Scope and limitations
 
-The trained model is deliberately **city-specific**. The dataset contract
-fixes the road network across all runs, so the model learns these 1669
-streets as individuals — its strongest feature is each street's own average
-day — and the served bundle is meaningless on any other map (the serving
-layer actually enforces this: geometry can only be attached to a bundle
-after the rebuilt city is validated against the stored network). What *does*
-carry over to any city running the same traffic dynamics: the entire
-pipeline (dataset → baselines → models → artifact → API → container reruns
-unchanged on a new map), and the qualitative findings — the ~1-minute decay
-of state information, climatology's dominance at medium horizons under
-periodic demand, demand revealing itself through occupancy rather than
-speed, queues preceding slowdowns. The numbers are this city's; the shape of
-the results is the traffic model's.
+The trained model is deliberately **city-specific**. The dataset contract fixes the road network across all runs, so the model learns these 1669 streets as individuals — its strongest feature is each street's own average day — and the served bundle is meaningless on any other map (the serving layer actually enforces this: geometry can only be attached to a bundle after the rebuilt city is validated against the stored network). What *does* carry over to any city running the same traffic dynamics: the entire pipeline (dataset → baselines → models → artifact → API → container reruns unchanged on a new map), and the qualitative findings — the ~1-minute decay of state information, climatology's dominance at medium horizons under periodic demand, demand revealing itself through occupancy rather than speed, queues preceding slowdowns. The numbers are this city's; the shape of the results is the traffic model's.
 
-The transferable version — a model trained on street *descriptions* (speed
-limit, length, lanes, land use, neighbour state) across many generated
-cities, rather than street *identities* in one — is the natural future-work
-direction (graph neural networks fit the road-graph structure directly), and
-the same distinction holds for the optimization phase: what was delivered is
-a timing plan for *this* city's intersections; a policy any intersection
-could run — one that observes its own queues and reacts — is the recorded
-future direction.
+**The transferable version** — a model trained on street *descriptions* (speed limit, length, lanes, land use, neighbour state) across many generated cities, rather than street *identities* in one — is the natural future-work direction (graph neural networks fit the road-graph structure directly), and the same distinction holds for the optimization phase: what was delivered is a timing plan for *this* city's intersections; a policy any intersection could run — one that observes its own queues and reacts — is the recorded future direction.
 
 ## Running from source
 
@@ -228,29 +124,15 @@ main.py               # CLI entry point
 Dockerfile            # the serving image
 ```
 
-## Roadmap
+## Roadmap (a chronological story of the project)
 
-1. ✅ Cars on edges → intersections → signals → routing → metrics
-2. ✅ A living city: zones, activity-based demand, parking, day/night
-3. ✅ Near-crash-free base model (every residual collision understood)
-4. ✅ Flow forecasting pipeline: dataset → baselines → models → analysis
-5. ✅ Serving: model artifact → FastAPI → Docker (→ Docker Hub)
-6. ✅ Map frontend: the live city replayed and coloured by the service's
-   forecasts, shipped inside the image
-7. ✅ Signal-timing optimization (direct policy search): a structured
-   search over whole-city timing knobs beats the measured green-wave
-   baseline 2.4× on held-out test days (+0.158 vs +0.065); a 48 h
-   evolution-strategy fine-tune over all 1,680 per-node dials then
-   *failed to improve further* on held-out seeds — a negative result,
-   measured and documented as such (`ml/opt/`)
-
-## Design philosophy
-
-Explicit state, readable updates, no black boxes; behaviours (traffic jams,
-the flow–density relation, rush hours) *emerge* from simple local rules
-rather than being imposed. Measured claims over plausible ones — every model
-comparison in this README comes from seeded, reproducible runs on held-out
-data, and negative results are kept on the record.
+1. Cars on edges → intersections → signals → routing → metrics
+2. A living city: zones, activity-based demand, parking, day/night
+3. Near-crash-free base model (every residual collision understood)
+4. Flow forecasting pipeline: dataset → baselines → models → analysis
+5. Serving: model artifact → FastAPI → Docker (→ Docker Hub)
+6. Map frontend: the live city replayed and coloured by the service's forecasts, shipped inside the image
+7. Signal-timing optimization (direct policy search): a structured search over whole-city timing knobs beats the measured green-wave baseline 2.4× on held-out test days (+0.158 vs +0.065); a 48 h evolution-strategy fine-tune over all 1,680 per-node dials then *failed to improve further* on held-out seeds — a negative result, measured and documented as such (`ml/opt/`)
 
 ## License
 
