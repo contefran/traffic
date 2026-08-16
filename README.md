@@ -185,6 +185,7 @@ traffic_sim/          # the simulator package (dependency-free core)
 ml/                   # the ML pipeline consuming the simulator
   dataset.py  baselines.py  linear.py  gbdt.py  sklearn_models.py
   analysis.py  artifact.py  serve.py
+  opt/                # signal-timing optimization: harness, stages, ES
 experiments/          # reproducible studies (signal phasing, gap sweeps, ...)
 tests/                # pytest suite covering both packages
 main.py               # CLI entry point
@@ -200,8 +201,12 @@ Dockerfile            # the serving image
 5. ✅ Serving: model artifact → FastAPI → Docker (→ Docker Hub)
 6. ✅ Map frontend: the live city replayed and coloured by the service's
    forecasts, shipped inside the image
-7. ⏳ Reinforcement learning: optimize per-intersection signal timing
-   against the measured green-wave baseline
+7. ✅ Signal-timing optimization (direct policy search): a structured
+   search over per-intersection timing beats the measured green-wave
+   baseline 2.6× on held-out days (J gain +0.163 vs +0.065); a 48 h
+   evolution-strategy fine-tune over all ~1,700 per-node dials then
+   *failed to improve further* on held-out seeds — measured, documented,
+   and delivered honestly (`ml/opt/`, `guides_plans/rl_plan.md`)
 
 ## Design philosophy
 
