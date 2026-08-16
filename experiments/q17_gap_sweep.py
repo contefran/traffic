@@ -6,7 +6,7 @@ accept much smaller ones. We sweep a single ``gap_scale`` that shrinks both
 measure throughput, delay and crashes at *unsignalized* junctions (``signals=
 None``, so the PriorityModel governs every intersection). Smaller gaps should
 raise throughput and cut delay — quantifying the self-driving benefit — with
-crashes as the honest guardrail.
+crashes as the guardrail.
 
 Run: ``python -m experiments.q17_gap_sweep``
 """

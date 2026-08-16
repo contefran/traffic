@@ -17,7 +17,7 @@ them on the held-out test days, and save everything a server needs into one
   ever sends the *dynamic* observations and the server fills in the rest.
 * **Metadata** — where the data came from, bin width, day length, tree
   counts, and each cell's measured test MAE: the bundle carries its own
-  honest scorecard.
+  measured scorecard.
 
 Run (writes ``ml/models/varied.joblib``, ~a few minutes)::
 

@@ -2,7 +2,7 @@
 
 A 2D city traffic simulator written from scratch in Python, used as the data
 factory for a complete machine-learning pipeline: the simulator generates
-traffic data, a forecasting model is trained and honestly evaluated on it, and
+traffic data, a forecasting model is trained and evaluated on held-out days, and
 the fitted model is served as a web API packaged in a Docker image you can run
 with one command.
 
@@ -103,7 +103,7 @@ scored on held-out days the model never saw:
 | Street speed, 10 s ahead | 11.7 km/h MAE | **8.2 km/h MAE** |
 | Street occupancy, 60 s ahead | 0.140 cars MAE | **0.121 cars MAE** |
 
-An honest, measured limitation worth stating: beyond ~1 minute, speed
+A measured limitation worth stating: beyond ~1 minute, speed
 forecasting in this city hits a ceiling — the demand pattern repeats daily,
 so the average day is nearly optimal and extra model capacity cannot help.
 The pipeline proves *why* (state information decays within ~2–3 signal
@@ -120,6 +120,41 @@ evaluation — the classic training–serving-skew bug is closed by
 construction, and an end-to-end test pins it. The `Dockerfile` packages the
 service with serving-only dependencies pinned to the versions the bundle was
 fitted with.
+
+## Signal-timing optimization
+
+The city's 336 traffic signals (green splits plus coordination offsets —
+1,680 numbers via the `ParameterSpace` adapter) are also an optimization
+problem: choose the timings that move the most traffic. The search harness
+(`ml/opt/`) scores a candidate plan by simulating full days under it and
+comparing against *same-seed* baseline days — **common random numbers**,
+because day-to-day demand noise is as large as the effects being measured.
+Trips completed is weighted alongside mean delay (a jammed city *flatters*
+its mean delay — only the lucky trips finish and get averaged), and crashes
+are a hard guardrail, never a currency the optimizer may spend.
+
+Measured on held-out test days the search never touched:
+
+| timing plan | score gain vs default plans | typical day |
+|---|---|---|
+| classical green wave | +0.065 | +110 trips, −4 s mean delay |
+| **optimized plan** | **+0.158** | **+240 trips, −11 s mean delay** |
+
+![Optimization verdict: per-seed scores on held-out days and load generalization](docs/screenshots/signal-optimization.png)
+
+The winning plan comes from a structured search over four whole-city knobs
+(cycle-length scale, through-green share, arterial bias, green-wave offset
+scale) — and the offset knob's optimum sitting at exactly 1.0 means the
+search independently *rediscovered* the classical green-wave progression
+speed rather than being told it. A 48-hour evolution-strategy fine-tune of
+all 1,680 per-intersection dials then **failed to improve further on
+held-out days** — its training-side gains were seed noise, caught by the
+validation protocol ([the search curve](docs/screenshots/signal-optimization-curve.png))
+— and the project reports that as the finding it is: under periodic demand,
+low-dimensional structure is near-optimal, the same lesson the forecasting
+phase learned from climatology. The plan generalizes across load (+0.17 /
++0.14 score gain at half / 1.5× the tuning demand), with one caveat: at
+heavy load its shorter cycles carry a measurable crash cost.
 
 ## Scope and limitations
 
@@ -141,9 +176,10 @@ The transferable version — a model trained on street *descriptions* (speed
 limit, length, lanes, land use, neighbour state) across many generated
 cities, rather than street *identities* in one — is the natural future-work
 direction (graph neural networks fit the road-graph structure directly), and
-the same distinction will apply to the reinforcement-learning phase: a
-timing plan for this city's intersections versus a policy any intersection
-could run.
+the same distinction holds for the optimization phase: what was delivered is
+a timing plan for *this* city's intersections; a policy any intersection
+could run — one that observes its own queues and reacts — is the recorded
+future direction.
 
 ## Running from source
 
@@ -202,11 +238,11 @@ Dockerfile            # the serving image
 6. ✅ Map frontend: the live city replayed and coloured by the service's
    forecasts, shipped inside the image
 7. ✅ Signal-timing optimization (direct policy search): a structured
-   search over per-intersection timing beats the measured green-wave
-   baseline 2.6× on held-out days (J gain +0.163 vs +0.065); a 48 h
-   evolution-strategy fine-tune over all ~1,700 per-node dials then
-   *failed to improve further* on held-out seeds — measured, documented,
-   and delivered honestly (`ml/opt/`, `guides_plans/rl_plan.md`)
+   search over whole-city timing knobs beats the measured green-wave
+   baseline 2.4× on held-out test days (+0.158 vs +0.065); a 48 h
+   evolution-strategy fine-tune over all 1,680 per-node dials then
+   *failed to improve further* on held-out seeds — a negative result,
+   measured and documented as such (`ml/opt/`)
 
 ## Design philosophy
 

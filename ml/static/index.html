@@ -382,7 +382,9 @@ async function boot() {
     `<b>${c.target}@${c.horizon_s}s</b> MAE ${c.test_mae.toFixed(c.target === "speed" ? 1 : 3)} ${c.mae_unit}`
   ).join(" · ");
   document.getElementById("scorecard").innerHTML =
-    `${health.n_edges} streets · held-out test: ${cells}`;
+    `${health.n_edges} streets · held-out test: ${cells}` +
+    ` · signal-timing study: optimized plan +7% trips / −18% delay` +
+    ` (2.4× a classical green wave, held-out days)`;
 
   net = await (await fetch("network")).json();
   fitView(); buildLegend(); draw();
@@ -393,7 +395,9 @@ async function boot() {
     slider.max = demo.n_bins - 1;
     slider.disabled = playBtn.disabled = false;
     noteEl.textContent = "replaying a held-out day the model never trained "
-      + "on — forecast views query the live model each step";
+      + "on — forecast views query the live model each step. Signals in "
+      + "this replay run the default timing; the optimized plan is an "
+      + "offline study result (see the repo).";
     await setBin(+(qp.get("bin") || 0));
   } else {
     noteEl.textContent = "no demo day on the server — observed/forecast "

@@ -9,7 +9,7 @@ common-random-numbers seed protocol (train {1-5} / validation {6, 7} / test
   against itself).
 * **Green wave** (``apply_green_wave``, encoded through the same
   :class:`ParameterSpace` vector path the optimizer will use) — the classical
-  coordination baseline, i.e. the honest floor.
+  coordination baseline, i.e. the floor any search result must beat.
 
 Usage::
 

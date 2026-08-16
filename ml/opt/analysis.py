@@ -12,7 +12,8 @@ fresh held-out days:
    plan (the best *validated* mean — by construction the stage-1 warm start
    whenever the ES never beat it) scored on the test seeds, next to the
    green-wave baseline, both against the default-timing baseline. These
-   seeds were never seen by any search stage, so this is the honest number.
+   seeds were never seen by any search stage, so this is the number that
+   counts.
 3. **Does the product generalize across load?** The same plan under lighter
    and heavier demand than the 1000 cars it was tuned at (q18's lesson:
    load moves the optimum), against matched same-seed same-load baselines.

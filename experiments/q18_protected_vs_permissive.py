@@ -74,7 +74,7 @@ def _one(load: int, speed_kmh: float, seed: int, name: str, steps: int) -> dict:
         "throughput_per_s": s["throughput_per_s"],
         # Delay is measured on *completed* trips only, so at saturation it is
         # survivorship-biased (cars stuck in queues never report); the count of
-        # completed trips is the honest companion number.
+        # completed trips is the necessary companion number.
         "trips": s.get("trips_completed", 0),
         "crashes": s["crashes"],
         "mean_speed": s["avg_speed"],

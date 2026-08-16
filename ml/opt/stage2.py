@@ -111,7 +111,7 @@ def run(*, checkpoint: str = CKPT, resume: bool = False,
         log(f"stage2: warm start {start_knobs} -> train J-(1-w) "
             f"{start_J - (1 - w):+.4f} (stage-1 anchor)")
         # The warm start is validation's opening bar: the ES's mean must
-        # beat it on held-out seeds or the honest product is stage 1's.
+        # beat it on held-out seeds or the delivered product is stage 1's.
         warm_val = evaluate(warm, val_seeds, val_base, w=w,
                             crash_cap=crash_cap, workers=workers, **overrides)
         best_val = None if warm_val.rejected else warm_val.J
